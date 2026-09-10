@@ -148,6 +148,16 @@ Flujo de una petición: `Controller` → `Service` (transacciones + reglas) → 
 
 Tests: `./gradlew test` · Empaquetar: `./gradlew bootJar` · Docker: `docker build -t chat-registro .`
 
+## Tests
+
+Patrón **AAA** (*Arrange – Act – Assert*) en toda la suite. Van todos en `./gradlew test`.
+
+- Unitarios y de slice: `RegistroServiceTest`, `RegistroControllerTest` (`@WebMvcTest`),
+  `UsuarioRepositoryTest` (`@DataJpaTest`, H2).
+- Integración: `@SpringBootTest` sobre H2 en memoria (no requiere MySQL).
+- **Seguridad (OWASP Top 10)**: `src/test/java/com/arquetipo/demo/security/`, una clase por
+  categoría verificable desde código — ver [`docs/testing-seguridad-owasp.md`](docs/testing-seguridad-owasp.md).
+
 ## Contrato de errores
 
 Todas las respuestas de error siguen RFC 9457:
