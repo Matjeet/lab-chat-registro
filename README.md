@@ -48,19 +48,27 @@ entidades y no modifica nada.
 Para un cambio de esquema se añade un fichero nuevo `V<n>__descripcion.sql` (nunca se edita
 uno ya aplicado) y se ajusta la entidad JPA correspondiente.
 
-### Credenciales
+### Credenciales y variables de entorno
 
 `application.yml` trae valores por defecto para desarrollo local. En cualquier otro entorno
 se sobreescriben por variables de entorno:
 
-| Variable | Por defecto |
-|----------|-------------|
-| `DB_URL` | `jdbc:mysql://localhost:3306/chat_registro?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&characterEncoding=UTF-8` |
-| `DB_USERNAME` | `chat_registro_svc` |
-| `DB_PASSWORD` | `chat_registro_pw` |
-| `JPA_DDL_AUTO` | `validate` |
+| Variable | Por defecto | Descripción |
+|----------|-------------|-------------|
+| `DB_URL` | `jdbc:mysql://localhost:3306/chat_registro?...` | JDBC URL del esquema del servicio |
+| `DB_USERNAME` | `chat_registro_svc` | Usuario propio del servicio |
+| `DB_PASSWORD` | `chat_registro_pw` | Contraseña de ese usuario |
+| `JPA_DDL_AUTO` | `validate` | `validate` \| `none` \| `update` \| `create` \| `create-drop` |
 
-Los tests usan H2 en memoria (`src/test/resources/application.yml`); no necesitan MySQL.
+Para desarrollo local hay un fichero **`.env`** (plantilla en [`.env.example`](.env.example),
+no se versiona):
+
+- `./gradlew bootRun` lo carga automáticamente (lógica en `build.gradle`).
+- Docker: `docker run --env-file .env chat-registro`.
+- Primera vez: `cp .env.example .env` y ajusta lo que necesites.
+
+Los tests usan H2 en memoria (`src/test/resources/application.yml`); **no** leen `.env` ni
+necesitan MySQL.
 
 ## Flujo de registro
 

@@ -1,6 +1,11 @@
 HELP.md
 .gradle
 build/
+
+### Variables de entorno (no versionar secretos; usar .env.example como plantilla) ###
+.env
+.env.*
+!.env.example
 !gradle/wrapper/gradle-wrapper.jar
 !**/src/main/**/build/
 !**/src/test/**/build/

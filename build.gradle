@@ -68,6 +68,31 @@ dependencies {
 
 tasks.named('test') {
 	useJUnitPlatform()
+	// Los tests NO leen .env: corren siempre sobre H2 en memoria.
+}
+
+// Carga el fichero .env (si existe) en el entorno de `bootRun`, para no tener que
+// exportar las variables a mano en desarrollo. Solo afecta a la ejecucion local:
+// en produccion/CI las variables las inyecta el entorno y en los tests no se usan.
+tasks.named('bootRun') {
+	def dotenv = rootProject.file('.env')
+	doFirst {
+		if (!dotenv.exists()) return
+		dotenv.readLines('UTF-8').each { rawLine ->
+			def line = rawLine.trim()
+			if (line.isEmpty() || line.startsWith('#')) return
+			def sep = line.indexOf('=')
+			if (sep <= 0) return
+			def key = line.substring(0, sep).trim()
+			def value = line.substring(sep + 1).trim()
+			if (value.length() >= 2 &&
+					((value.startsWith('"') && value.endsWith('"')) ||
+					 (value.startsWith("'") && value.endsWith("'")))) {
+				value = value.substring(1, value.length() - 1)
+			}
+			environment(key, value)
+		}
+	}
 }
 
 // Solo se publica el jar ejecutable de Spring Boot (evita el "-plain.jar").
