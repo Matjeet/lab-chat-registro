@@ -21,7 +21,7 @@ anotaciones.
 | Formato de errores | `application/problem+json` (RFC 9457) |
 | Codificación | UTF-8 |
 | Fechas y horas | ISO-8601 en UTC, con precisión de microsegundos — ej. `2026-09-09T03:13:36.766818Z` |
-| Autenticación | **Ninguna** por ahora. El registro es un endpoint público. |
+| Autenticación | La identidad la gestiona **Firebase Auth**. `POST /api/v1/registro` no exige cabecera de auth todavía (ver nota de seguridad en §3.1); en el resto de endpoints que se vayan añadiendo, esperar `Authorization: Bearer <idToken>`. |
 | CORS | Habilitado para `/api/**`. Orígenes permitidos vía `CORS_ALLOWED_ORIGINS` (lista separada por comas). Métodos `GET,POST,PUT,PATCH,DELETE,OPTIONS`; sin credenciales por defecto (`CORS_ALLOW_CREDENTIALS=false`). Un origen fuera de la lista recibe `403` sin cabeceras `Access-Control-*`. |
 
 ### Entornos
@@ -75,7 +75,16 @@ cuerpo:
 
 ### 3.1 `POST /api/v1/registro` — Registrar un usuario
 
-Da de alta un usuario nuevo.
+Completa el alta de un usuario **que ya se autenticó con Firebase Auth** en el cliente (SDK
+de Firebase: email/password, Google, etc.). Este servicio no gestiona contraseñas; solo
+guarda el `uid` que Firebase asignó y el proveedor usado.
+
+> ⚠️ **Nota de seguridad (estado actual):** `uid` y `proveedor` se toman **tal cual
+> del cuerpo de la petición** — este endpoint todavía **no verifica** el ID token de Firebase.
+> Cualquiera que conozca el contrato podría enviar un `uid` inventado. No usar en
+> producción sin añadir esa verificación (filtro que valide `Authorization: Bearer <idToken>`
+> con Firebase Admin SDK o un Resource Server, y derive estos dos valores del token, no del
+> body). Ver `docs/testing-seguridad-owasp.md` (A07).
 
 #### Petición
 
@@ -84,15 +93,26 @@ Da de alta un usuario nuevo.
 | Método | `POST` |
 | Path | `/api/v1/registro` |
 | Headers | `Content-Type: application/json` |
-| Autenticación | No |
+| Autenticación | Ninguna exigida por el endpoint hoy (ver nota de arriba) |
 
-Cuerpo:
+Cuerpo (el mínimo que ya envía `chat-frontend` hoy):
 
 ```json
 {
   "username": "mateo",
   "email": "mateo@example.com",
-  "password": "secretpass"
+  "uid": "aB3dEfGhIjKlMnOpQrStUvWxYz12"
+}
+```
+
+Cuerpo completo, con `proveedor` explícito (para un proveedor distinto de `password`):
+
+```json
+{
+  "username": "mateo",
+  "email": "mateo@example.com",
+  "uid": "aB3dEfGhIjKlMnOpQrStUvWxYz12",
+  "proveedor": "google.com"
 }
 ```
 
@@ -100,9 +120,11 @@ Cuerpo:
 |---|---|---|---|
 | `username` | string | sí | 3–50 caracteres. Solo `A–Z a–z 0–9 . _ -`. Único (sin distinguir mayúsculas). |
 | `email` | string | sí | Formato de email válido. Máx. 255 caracteres. Único (sin distinguir mayúsculas). Se normaliza a minúsculas antes de guardar. |
-| `password` | string | sí | 8–100 caracteres. Se almacena solo como hash BCrypt; **nunca** se devuelve. |
+| `uid` | string | sí | 1–128 caracteres. El UID que devuelve Firebase Auth tras autenticarse (`user.uid` del SDK). Único. |
+| `proveedor` | string | **no** | Uno exacto de: `password`, `google.com`, `facebook.com`, `apple.com`, `github.com`, `twitter.com`, `phone`, `anonymous` (los `providerId` de Firebase Auth). **Si se omite, el servidor asume `"password"`.** Si se envía, debe ser uno de los valores soportados o se rechaza con 400. |
 
-Se ignora cualquier campo extra del cuerpo.
+Se ignora cualquier campo extra del cuerpo (p. ej. un `password` residual de una integración
+vieja: no se persiste ni se valida).
 
 #### Respuesta `201 Created`
 
@@ -113,6 +135,7 @@ Se ignora cualquier campo extra del cuerpo.
   "id": 1,
   "username": "mateo",
   "email": "mateo@example.com",
+  "proveedor": "password",
   "activo": true,
   "createdAt": "2026-09-09T03:13:36.766818Z"
 }
@@ -123,10 +146,12 @@ Se ignora cualquier campo extra del cuerpo.
 | `id` | number | Identificador asignado por el servidor. |
 | `username` | string | Tal cual se envió (recortando espacios). |
 | `email` | string | Normalizado a minúsculas. |
+| `proveedor` | string | Proveedor de Firebase Auth usado en el alta. |
 | `activo` | boolean | Siempre `true` en un alta nueva. |
 | `createdAt` | string (ISO-8601) | Instante de creación en UTC. |
 
-> No se devuelve cabecera `Location` en esta versión.
+> El `uid` **no** se devuelve en la respuesta. No se devuelve cabecera `Location` en
+> esta versión.
 
 #### Respuesta `400 Bad Request` — validación
 
@@ -144,13 +169,13 @@ que falló:
   "errors": [
     { "field": "username", "message": "el tamaño debe estar entre 3 y 50" },
     { "field": "email", "message": "debe ser una dirección de correo electrónico con formato correcto" },
-    { "field": "password", "message": "el tamaño debe estar entre 8 y 100" }
+    { "field": "proveedor", "message": "proveedor no soportado" }
   ]
 }
 ```
 
-- `errors[].field` es el nombre del campo del cuerpo (`username`, `email`, `password`) — úsalo
-  para marcar el input correspondiente en el formulario.
+- `errors[].field` es el nombre del campo del cuerpo (`username`, `email`, `uid`,
+  `proveedor`) — úsalo para marcar el input correspondiente en el formulario.
 - `errors[].message` es **orientativo** (texto por defecto de Bean Validation, puede variar
   según el idioma del servidor). El frontend debería mostrar sus propios textos a partir de
   `field` y las reglas de esta tabla, no confiar en `message` palabra por palabra.
@@ -171,9 +196,9 @@ que falló:
 ```
 
 > **Por seguridad, el `409` es deliberadamente genérico.** No indica si colisionó el
-> `username` o el `email`, ni devuelve el valor enviado, para no permitir enumerar cuentas.
-> El frontend debe mostrar un mensaje del tipo *"No se pudo completar el registro. Revisa los
-> datos e inténtalo de nuevo."* y **no** intentar deducir qué campo falló.
+> `username`, el `email` o el `uid`, ni devuelve el valor enviado, para no permitir
+> enumerar cuentas. El frontend debe mostrar un mensaje del tipo *"No se pudo completar el
+> registro. Revisa los datos e inténtalo de nuevo."* y **no** intentar deducir qué campo falló.
 
 #### Respuesta `500 Internal Server Error`
 
@@ -184,7 +209,7 @@ que falló:
 ```bash
 curl -i -X POST http://localhost:8080/api/v1/registro \
   -H 'Content-Type: application/json' \
-  -d '{"username":"mateo","email":"mateo@example.com","password":"secretpass"}'
+  -d '{"username":"mateo","email":"mateo@example.com","uid":"aB3dEfGhIjKlMnOpQrStUvWxYz12","proveedor":"password"}'
 ```
 
 ---
@@ -194,24 +219,35 @@ curl -i -X POST http://localhost:8080/api/v1/registro \
 1. **Ramifica por `type`, no por `status` ni por textos.** `title`/`detail` pueden cambiar de
    redacción sin previo aviso; `type` y `status` son estables.
 2. **El `409` no dice qué campo colisiona.** Es intencional. Mensaje genérico en la UI.
-3. **`password` nunca vuelve en ninguna respuesta.** No lo guardes ni lo muestres tras el alta.
+3. **`uid` nunca vuelve en la respuesta.** No lo necesitas: ya lo tienes en el cliente
+   tras autenticarte con el SDK de Firebase.
 4. **El `email` se normaliza a minúsculas** en el servidor; si tu UI lo muestra tras el alta,
    usa el valor devuelto en la respuesta, no el que tecleó el usuario.
 5. **Validación en cliente = espejo de la tabla de §3.1**, para feedback inmediato; la
    validación del servidor es la autoritativa y devuelve `400` con `errors[]`.
-6. **Unicidad de `username`/`email` no se puede pre-comprobar** (no hay endpoint para ello,
-   también por el tema de enumeración). Se descubre al recibir el `409` del `POST`.
+6. **Unicidad de `username`/`email`/`uid` no se puede pre-comprobar** (no hay endpoint
+   para ello, también por el tema de enumeración). Se descubre al recibir el `409` del `POST`.
+7. **Llama a este endpoint después de que Firebase confirme la autenticación**, no antes: el
+   `uid` y el `proveedor` de este `POST` deben salir del resultado del SDK de Firebase
+   (`userCredential.user.uid` / `providerId`), no inventarse ni pedirse al usuario.
+8. **`proveedor` es opcional.** Si tu flujo solo usa email/password puedes omitirlo (el
+   servidor asume `"password"`); mándalo explícito solo si soportas otros proveedores.
 
 ---
 
 ## 5. Modelos (TypeScript)
 
 ```ts
+export type ProveedorAuth =
+  | "password" | "google.com" | "facebook.com" | "apple.com"
+  | "github.com" | "twitter.com" | "phone" | "anonymous";
+
 // Petición
 export interface RegistroRequest {
-  username: string; // 3–50, /^[A-Za-z0-9._-]+$/
-  email: string;    // email válido, <= 255
-  password: string; // 8–100
+  username: string;      // 3–50, /^[A-Za-z0-9._-]+$/
+  email: string;         // email válido, <= 255
+  uid: string;           // 1–128, tal cual lo devuelve Firebase Auth (user.uid)
+  proveedor?: ProveedorAuth; // opcional: si se omite, el servidor asume "password"
 }
 
 // Respuesta 201
@@ -219,6 +255,7 @@ export interface RegistroResponse {
   id: number;
   username: string;
   email: string;
+  proveedor: ProveedorAuth;
   activo: boolean;
   createdAt: string; // ISO-8601 UTC
 }
@@ -235,7 +272,7 @@ export interface ProblemDetail {
 }
 
 export interface FieldError {
-  field: string;   // "username" | "email" | "password"
+  field: string;   // "username" | "email" | "uid" | "proveedor"
   message: string; // orientativo
 }
 ```
@@ -256,4 +293,5 @@ export interface FieldError {
 
 | Fecha | Cambio |
 |---|---|
+| 2026-09-12 | `POST /api/v1/registro` cambia de contraseña propia a Firebase Auth: `password` → `uid` (obligatorio) + `proveedor` (opcional, por defecto `password`). `RegistroResponse` gana `proveedor`. |
 | 2026-09-09 | Versión inicial: `POST /api/v1/registro`. |

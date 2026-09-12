@@ -13,5 +13,7 @@ public interface UsuarioRepository extends JpaRepository<Usuario, Long> {
 
 	boolean existsByEmailIgnoreCase(String email);
 
+	boolean existsByFirebaseUid(String firebaseUid);
+
 	Optional<Usuario> findByUsernameIgnoreCase(String username);
 }

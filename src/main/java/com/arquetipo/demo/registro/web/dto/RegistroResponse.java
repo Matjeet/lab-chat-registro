@@ -4,7 +4,8 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import java.time.Instant;
 
 /**
- * DTO de salida tras registrar un usuario. No expone la contrasena ni su hash.
+ * DTO de salida tras registrar un usuario. No expone el UID de Firebase ni ningun dato de
+ * autenticacion mas alla del proveedor usado.
  */
 @Schema(name = "RegistroResponse", description = "Usuario registrado")
 public record RegistroResponse(
@@ -17,6 +18,9 @@ public record RegistroResponse(
 
 		@Schema(description = "Correo electronico (en minusculas)", example = "mateo@example.com")
 		String email,
+
+		@Schema(description = "Proveedor de Firebase Auth usado en el alta", example = "password")
+		String proveedor,
 
 		@Schema(description = "Si la cuenta esta activa", example = "true")
 		boolean activo,

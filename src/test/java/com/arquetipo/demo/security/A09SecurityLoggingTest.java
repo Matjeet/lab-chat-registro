@@ -6,11 +6,14 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 
 import com.arquetipo.demo.common.exception.DuplicateResourceException;
+import com.arquetipo.demo.registro.domain.ProveedorAuth;
 import com.arquetipo.demo.registro.domain.Usuario;
 import com.arquetipo.demo.registro.mapper.UsuarioMapper;
+import com.arquetipo.demo.registro.repository.ProveedorAuthRepository;
 import com.arquetipo.demo.registro.repository.UsuarioRepository;
 import com.arquetipo.demo.registro.service.RegistroService;
 import com.arquetipo.demo.registro.web.dto.RegistroRequest;
+import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -19,7 +22,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 
 /**
  * OWASP A09:2021 - Security Logging and Monitoring Failures.
@@ -34,15 +36,25 @@ class A09SecurityLoggingTest {
 	@Mock
 	private UsuarioRepository repository;
 
+	@Mock
+	private ProveedorAuthRepository proveedorRepository;
+
 	private RegistroService service;
 
 	@BeforeEach
 	void setUp() {
-		service = new RegistroService(repository, new UsuarioMapper(), new BCryptPasswordEncoder());
+		service = new RegistroService(repository, proveedorRepository, new UsuarioMapper());
 	}
 
 	private static RegistroRequest request() {
-		return new RegistroRequest("mateo", "mateo@example.com", "passwordValida");
+		return new RegistroRequest("mateo", "mateo@example.com", "firebase-uid-mateo", "password");
+	}
+
+	private static ProveedorAuth proveedorPassword() {
+		ProveedorAuth proveedor = new ProveedorAuth();
+		proveedor.setId(1L);
+		proveedor.setNombre("password");
+		return proveedor;
 	}
 
 	@Test
@@ -71,6 +83,8 @@ class A09SecurityLoggingTest {
 		// Arrange
 		when(repository.existsByUsernameIgnoreCase("mateo")).thenReturn(false);
 		when(repository.existsByEmailIgnoreCase("mateo@example.com")).thenReturn(false);
+		when(repository.existsByFirebaseUid("firebase-uid-mateo")).thenReturn(false);
+		when(proveedorRepository.findByNombreIgnoreCase("password")).thenReturn(Optional.of(proveedorPassword()));
 		when(repository.saveAndFlush(any(Usuario.class)))
 				.thenThrow(new DataIntegrityViolationException("Duplicate entry for key 'uk_usuarios_email'"));
 

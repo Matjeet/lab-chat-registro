@@ -6,7 +6,7 @@ import org.springframework.stereotype.Component;
 
 /**
  * Mapeo manual entre {@link Usuario} y sus DTO. La creacion de la entidad vive en el
- * servicio porque necesita hashear la contrasena antes de asignarla.
+ * servicio porque necesita resolver el {@code ProveedorAuth} antes de asignarlo.
  */
 @Component
 public class UsuarioMapper {
@@ -16,6 +16,7 @@ public class UsuarioMapper {
 				usuario.getId(),
 				usuario.getUsername(),
 				usuario.getEmail(),
+				usuario.getProveedor().getNombre(),
 				usuario.isActivo(),
 				usuario.getCreatedAt());
 	}

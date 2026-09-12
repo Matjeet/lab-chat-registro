@@ -25,9 +25,11 @@ public interface RegistroApi {
 	@Operation(
 			summary = "Registrar un usuario",
 			description = """
-					Da de alta un usuario nuevo. El `username` y el `email` deben ser unicos
-					(no se distinguen mayusculas de minusculas) y el `email` se normaliza a
-					minusculas antes de guardarlo. La contrasena se almacena solo como hash BCrypt.
+					Completa el alta de un usuario que ya se autentico con Firebase Auth. El
+					`username` y el `email` deben ser unicos (no se distinguen mayusculas de
+					minusculas) y el `email` se normaliza a minusculas antes de guardarlo. El
+					`uid` identifica la cuenta de Firebase; el `proveedor` es opcional (por
+					defecto `password`). El servicio no gestiona contrasenas.
 					""")
 	@ApiResponses({
 			@ApiResponse(
@@ -41,6 +43,7 @@ public interface RegistroApi {
 									  "id": 1,
 									  "username": "mateo",
 									  "email": "mateo@example.com",
+									  "proveedor": "password",
 									  "activo": true,
 									  "createdAt": "2026-09-08T20:53:47.441193Z"
 									}

@@ -42,9 +42,6 @@ dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-flyway'
 	runtimeOnly 'org.flywaydb:flyway-mysql'
 
-	// --- Seguridad (hash de contrasenas) ---
-	implementation 'org.springframework.security:spring-security-crypto'
-
 	// --- Observabilidad ---
 	implementation 'org.springframework.boot:spring-boot-starter-actuator'
 

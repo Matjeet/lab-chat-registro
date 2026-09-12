@@ -5,62 +5,74 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.arquetipo.demo.registro.domain.ProveedorAuth;
 import com.arquetipo.demo.registro.domain.Usuario;
+import com.arquetipo.demo.registro.repository.ProveedorAuthRepository;
 import com.arquetipo.demo.registro.repository.UsuarioRepository;
+import java.lang.reflect.Field;
+import java.util.Arrays;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
  * OWASP A02:2021 - Cryptographic Failures.
  *
- * <p>Verifica que la contrasena se almacena cifrada (hash BCrypt) y que ni la contrasena ni
- * su hash salen nunca del servidor.
+ * <p>Este servicio ya NO gestiona contrasenas: la autenticacion la hace Firebase Auth y aqui
+ * solo se guarda el {@code firebaseUid} (un identificador, no un secreto) y el proveedor
+ * usado. No hay material criptografico propio que verificar; estos tests son una guarda de
+ * regresion para que nadie reintroduzca almacenamiento de contrasenas en este servicio.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
 @Transactional
 class A02CryptographicFailuresTest {
 
-	private static final String PLAINTEXT = "S3cretoDelUsuario!";
-
 	@Autowired
 	private MockMvc mockMvc;
 
 	@Autowired
-	private UsuarioRepository repository;
+	private UsuarioRepository usuarioRepository;
 
-	@Test
-	void registro_almacenaLaContrasenaComoHashBcrypt_noEnClaro() throws Exception {
-		// Arrange
-		String body = """
-				{"username":"cripto1","email":"cripto1@example.com","password":"%s"}
-				""".formatted(PLAINTEXT);
+	@Autowired
+	private ProveedorAuthRepository proveedorAuthRepository;
 
-		// Act
-		mockMvc.perform(post("/api/v1/registro").contentType(MediaType.APPLICATION_JSON).content(body))
-				.andExpect(status().isCreated());
-
-		// Assert
-		Usuario guardado = repository.findByUsernameIgnoreCase("cripto1").orElseThrow();
-		assertThat(guardado.getPasswordHash())
-				.isNotEqualTo(PLAINTEXT)
-				.startsWith("$2");                       // prefijo de un hash BCrypt
-		assertThat(guardado.getPasswordHash().length()).isBetween(59, 60);
-		assertThat(new BCryptPasswordEncoder().matches(PLAINTEXT, guardado.getPasswordHash())).isTrue();
+	@BeforeEach
+	void seedProveedor() {
+		if (proveedorAuthRepository.findByNombreIgnoreCase("password").isEmpty()) {
+			ProveedorAuth proveedor = new ProveedorAuth();
+			proveedor.setNombre("password");
+			proveedorAuthRepository.saveAndFlush(proveedor);
+		}
 	}
 
 	@Test
-	void registro_laRespuestaNoExponeContrasenaNiHash() throws Exception {
-		// Arrange
+	void entidadUsuario_noTieneNingunCampoDeCredenciales() {
+		// Arrange + Act: inspecciona los campos declarados de la entidad
+		boolean tieneCampoDeCredenciales = Arrays.stream(Usuario.class.getDeclaredFields())
+				.map(Field::getName)
+				.map(String::toLowerCase)
+				.anyMatch(nombre -> nombre.contains("password")
+						|| nombre.contains("credential")
+						|| nombre.contains("secret"));
+
+		// Assert: guarda de regresion — la autenticacion es responsabilidad de Firebase
+		assertThat(tieneCampoDeCredenciales).isFalse();
+	}
+
+	@Test
+	void registro_siEnvianUnCampoPassword_seIgnoraYNoSePersisteNiSeDevuelve() throws Exception {
+		// Arrange: el cliente manda un campo "password" que el contrato ya no define
+		String secreto = "esto-no-deberia-guardarse-en-ningun-lado";
 		String body = """
-				{"username":"cripto2","email":"cripto2@example.com","password":"%s"}
-				""".formatted(PLAINTEXT);
+				{"username":"cripto1","email":"cripto1@example.com","uid":"fb-cripto1",
+				 "proveedor":"password","password":"%s"}
+				""".formatted(secreto);
 
 		// Act
 		String respuesta = mockMvc.perform(post("/api/v1/registro")
@@ -70,10 +82,9 @@ class A02CryptographicFailuresTest {
 				.andExpect(jsonPath("$.passwordHash").doesNotExist())
 				.andReturn().getResponse().getContentAsString();
 
-		// Assert
-		assertThat(respuesta)
-				.doesNotContain(PLAINTEXT)
-				.doesNotContain("$2a$")
-				.doesNotContain("$2b$");
+		// Assert: ni la respuesta ni la entidad persistida conservan ese valor
+		assertThat(respuesta).doesNotContain(secreto);
+		Usuario guardado = usuarioRepository.findByUsernameIgnoreCase("cripto1").orElseThrow();
+		assertThat(guardado.getFirebaseUid()).isEqualTo("fb-cripto1");
 	}
 }

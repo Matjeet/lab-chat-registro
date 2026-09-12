@@ -13,7 +13,7 @@ base de datos MySQL centralizada del sistema.
 | Build | Gradle (wrapper incluido) |
 | Persistencia | Spring Data JPA + Hibernate; MySQL (runtime), H2 en memoria (tests) |
 | Migraciones | Flyway (`spring-boot-starter-flyway` + `flyway-mysql`) |
-| Contraseñas | BCrypt (`spring-security-crypto`) |
+| Autenticación | Firebase Auth (externa). El servicio no gestiona contraseñas. |
 | Validación | Bean Validation (`spring-boot-starter-validation`) |
 | Errores | RFC 9457 *Problem Details* vía `@RestControllerAdvice` |
 | Docs API | springdoc-openapi + Swagger UI |
@@ -40,10 +40,14 @@ Crea el esquema `chat_registro` y el usuario `chat_registro_svc` / `chat_registr
 ### Esquema de tablas (Flyway)
 
 Las tablas las crea **Flyway** al arrancar la aplicación, aplicando en orden las migraciones
-de `src/main/resources/db/migration` (`V1__crear_tabla_usuarios.sql`, …) y registrando en
-`flyway_schema_history` las ya ejecutadas. Hibernate solo **valida**
-(`spring.jpa.hibernate.ddl-auto=validate`): comprueba que las tablas cuadran con las
-entidades y no modifica nada.
+de `src/main/resources/db/migration` y registrando en `flyway_schema_history` las ya
+ejecutadas. Hibernate solo **valida** (`spring.jpa.hibernate.ddl-auto=validate`): comprueba
+que las tablas cuadran con las entidades y no modifica nada.
+
+| Migración | Qué hace |
+|---|---|
+| `V1__crear_tabla_usuarios.sql` | Tabla `usuarios` (username, email, password_hash — ya retirada, ver `V2`). |
+| `V2__usuarios_firebase_auth.sql` | Tabla auxiliar `proveedores_auth` (sembrada con los `providerId` de Firebase Auth); en `usuarios` quita `password_hash` y añade `firebase_uid` (único) y `proveedor_id` (FK a `proveedores_auth`). |
 
 Para un cambio de esquema se añade un fichero nuevo `V<n>__descripcion.sql` (nunca se edita
 uno ya aplicado) y se ajusta la entidad JPA correspondiente.
@@ -75,23 +79,44 @@ necesitan MySQL.
 
 ## Flujo de registro
 
+La identidad la gestiona **Firebase Auth**: el cliente se autentica con el SDK de Firebase
+(email/password, Google, etc.) y luego llama a este endpoint para completar el alta del
+perfil de dominio. El servicio **no gestiona contraseñas** — no hay hash, no hay política de
+fortaleza de contraseña aquí, todo eso lo resuelve Firebase.
+
 `POST /api/v1/registro`
 
 ```json
-{ "username": "mateo", "email": "mateo@example.com", "password": "secretpass" }
+{
+  "username": "mateo",
+  "email": "mateo@example.com",
+  "uid": "aB3dEfGhIjKlMnOpQrStUvWxYz12",
+  "proveedor": "password"
+}
 ```
 
 - `username`: 3–50 caracteres, `[a-zA-Z0-9._-]`, único (sin distinguir mayúsculas).
 - `email`: formato válido, ≤255, único (se normaliza a minúsculas).
-- `password`: 8–100 caracteres; se guarda **solo el hash BCrypt**, nunca en claro.
+- `uid`: 1–128 caracteres, el UID que Firebase asignó al autenticarse (`user.uid`). Único.
+- `proveedor` (**opcional**, por defecto `password`): uno exacto de los `providerId` de
+  Firebase Auth — `password`, `google.com`, `facebook.com`, `apple.com`, `github.com`,
+  `twitter.com`, `phone`, `anonymous` — resuelto contra la tabla auxiliar `proveedores_auth`
+  (FK `usuarios.proveedor_id`).
 
-Respuestas: `201` con el usuario creado (sin hash) · `409` si los datos entran en conflicto
-con una cuenta existente · `400` con lista `errors` si la validación falla.
+Respuestas: `201` con el usuario creado · `409` si los datos entran en conflicto con una
+cuenta existente (username, email **o** uid) · `400` con lista `errors` si la
+validación falla.
 
 Por seguridad, el `409` devuelve **siempre el mismo mensaje genérico** (`"No se pudo
 completar el registro con los datos proporcionados"`), sin revelar qué campo colisionó ni
-el valor enviado. El detalle (username/email concretos) queda solo en el log del servidor
-(`WARN`), para no facilitar la enumeración de cuentas.
+el valor enviado. El detalle concreto queda solo en el log del servidor (`WARN`), para no
+facilitar la enumeración de cuentas.
+
+> ⚠️ **Gap de seguridad pendiente:** el endpoint todavía no verifica el ID token de Firebase;
+> confía en `uid`/`proveedor` tal cual llegan en el body. Antes de usarlo fuera de
+> desarrollo hace falta un filtro que valide `Authorization: Bearer <idToken>` (Firebase Admin
+> SDK o un Resource Server con el JWK de Firebase) y derive esos dos valores del token
+> verificado. Ver `docs/testing-seguridad-owasp.md` (A01/A07).
 
 El contrato completo (esquemas, ejemplos y códigos de respuesta) está documentado con
 anotaciones OpenAPI en la interfaz `RegistroApi` (que implementa el controlador) y en los
@@ -121,20 +146,22 @@ com.arquetipo.demo
 │   │   └── DuplicateResourceException       → 409
 │   └── web/GlobalExceptionHandler.java      excepciones → Problem Details (RFC 9457)
 └── registro/                            flujo de alta de usuarios
-    ├── config/PasswordEncoderConfig.java    bean PasswordEncoder (BCrypt)
     ├── domain/Usuario.java                  entidad JPA (tabla `usuarios`)
+    ├── domain/ProveedorAuth.java            entidad JPA de solo lectura (tabla `proveedores_auth`)
     ├── repository/UsuarioRepository.java    existsBy… / findBy… ignorando mayúsculas
+    ├── repository/ProveedorAuthRepository.java  findByNombreIgnoreCase
     ├── mapper/UsuarioMapper.java            entidad → RegistroResponse
-    ├── service/RegistroService.java         unicidad + hash + persistencia
+    ├── service/RegistroService.java         unicidad + resolucion del proveedor + persistencia
     └── web/
         ├── RegistroController.java          POST /api/v1/registro (enrutado + delegación)
         ├── RegistroApi.java                 contrato OpenAPI (anotaciones springdoc)
         └── dto/RegistroRequest.java · RegistroResponse.java
 
 src/main/resources/db
-├── bootstrap.sql                       esquema + usuario (se ejecuta como root, 1 vez)
+├── bootstrap.sql                            esquema + usuario (se ejecuta como root, 1 vez)
 └── migration/
-    └── V1__crear_tabla_usuarios.sql     migración Flyway
+    ├── V1__crear_tabla_usuarios.sql          migración Flyway inicial
+    └── V2__usuarios_firebase_auth.sql        quita password_hash; añade firebase_uid + proveedores_auth
 ```
 
 Flujo de una petición: `Controller` → `Service` (transacciones + reglas) → `Repository` (JPA)

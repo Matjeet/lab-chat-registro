@@ -5,7 +5,10 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.arquetipo.demo.registro.domain.ProveedorAuth;
+import com.arquetipo.demo.registro.repository.ProveedorAuthRepository;
 import com.arquetipo.demo.registro.repository.UsuarioRepository;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -34,6 +37,18 @@ class A03InjectionTest {
 	@Autowired
 	private UsuarioRepository repository;
 
+	@Autowired
+	private ProveedorAuthRepository proveedorAuthRepository;
+
+	@BeforeEach
+	void seedProveedor() {
+		if (proveedorAuthRepository.findByNombreIgnoreCase("password").isEmpty()) {
+			ProveedorAuth proveedor = new ProveedorAuth();
+			proveedor.setNombre("password");
+			proveedorAuthRepository.saveAndFlush(proveedor);
+		}
+	}
+
 	@ParameterizedTest
 	@ValueSource(strings = {
 			"admin' OR '1'='1",
@@ -41,12 +56,12 @@ class A03InjectionTest {
 			"mateo\" OR \"\"=\"",
 			"<script>alert(1)</script>",
 			"robert'); DROP TABLE usuarios;--",
-			"' UNION SELECT password_hash FROM usuarios --"
+			"' UNION SELECT firebase_uid FROM usuarios --"
 	})
 	void registro_payloadDeInyeccionEnUsername_seRechazaSinError(String payload) throws Exception {
 		// Arrange
 		String body = """
-				{"username":%s,"email":"inj@example.com","password":"passwordValida"}
+				{"username":%s,"email":"inj@example.com","uid":"fb-inj-username","proveedor":"password"}
 				""".formatted(toJson(payload));
 
 		// Act
@@ -67,7 +82,7 @@ class A03InjectionTest {
 	void registro_payloadDeInyeccionEnEmail_nuncaProvocaErrorDeServidor(String payload) throws Exception {
 		// Arrange
 		String body = """
-				{"username":"injmail","email":%s,"password":"passwordValida"}
+				{"username":"injmail","email":%s,"uid":"fb-inj-email","proveedor":"password"}
 				""".formatted(toJson(payload));
 
 		// Act
@@ -76,6 +91,27 @@ class A03InjectionTest {
 				.andReturn().getResponse().getStatus();
 
 		// Assert: la validacion lo rechaza o se guarda como literal, pero JAMAS es un 5xx
+		assertThat(statusCode).isLessThan(500);
+	}
+
+	@ParameterizedTest
+	@ValueSource(strings = {
+			"' OR '1'='1",
+			"'; DROP TABLE proveedores_auth; --"
+	})
+	void registro_payloadDeInyeccionEnUid_seRechazaSinError(String payload) throws Exception {
+		// Arrange
+		String body = """
+				{"username":"injuid","email":"injuid@example.com","uid":%s,"proveedor":"password"}
+				""".formatted(toJson(payload));
+
+		// Act
+		int statusCode = mockMvc.perform(post("/api/v1/registro")
+						.contentType(MediaType.APPLICATION_JSON).content(body))
+				.andReturn().getResponse().getStatus();
+
+		// Assert: nunca un error de servidor; el uid se guarda como literal si pasa
+		// la validacion de formato (solo longitud, no hay @Pattern), o se rechaza con 400.
 		assertThat(statusCode).isLessThan(500);
 	}
 
@@ -88,6 +124,7 @@ class A03InjectionTest {
 		assertThatCode(() -> {
 			assertThat(repository.existsByUsernameIgnoreCase(sqli)).isFalse();
 			assertThat(repository.existsByEmailIgnoreCase(sqli)).isFalse();
+			assertThat(repository.existsByFirebaseUid(sqli)).isFalse();
 			assertThat(repository.findByUsernameIgnoreCase(sqli)).isEmpty();
 		}).doesNotThrowAnyException();
 	}
@@ -97,13 +134,15 @@ class A03InjectionTest {
 		// Arrange: lanzar un payload destructivo
 		mockMvc.perform(post("/api/v1/registro").contentType(MediaType.APPLICATION_JSON)
 				.content("""
-						{"username":"'; DROP TABLE usuarios; --","email":"x@x.com","password":"passwordValida"}
+						{"username":"'; DROP TABLE usuarios; --","email":"x@x.com",
+						 "uid":"fb-destructivo","proveedor":"password"}
 						"""));
 
 		// Act: un alta legitima posterior
 		mockMvc.perform(post("/api/v1/registro").contentType(MediaType.APPLICATION_JSON)
 						.content("""
-								{"username":"legitimo","email":"legitimo@example.com","password":"passwordValida"}
+								{"username":"legitimo","email":"legitimo@example.com",
+								 "uid":"fb-legitimo","proveedor":"password"}
 								"""))
 				.andExpect(status().isCreated());
 

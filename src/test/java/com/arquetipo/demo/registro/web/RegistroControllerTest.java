@@ -27,20 +27,22 @@ class RegistroControllerTest {
 	private RegistroService registroService;
 
 	@Test
-	void registrar_datosValidos_devuelve201SinHash() throws Exception {
+	void registrar_datosValidos_devuelve201SinDatosDeAutenticacion() throws Exception {
 		when(registroService.registrar(any()))
-				.thenReturn(new RegistroResponse(1L, "mateo", "mateo@example.com", true, Instant.now()));
+				.thenReturn(new RegistroResponse(1L, "mateo", "mateo@example.com", "password", true, Instant.now()));
 
 		mockMvc.perform(post("/api/v1/registro")
 						.contentType(MediaType.APPLICATION_JSON)
 						.content("""
-								{"username":"mateo","email":"mateo@example.com","password":"secretpass"}
+								{"username":"mateo","email":"mateo@example.com","uid":"firebase-uid-1","proveedor":"password"}
 								"""))
 				.andExpect(status().isCreated())
 				.andExpect(jsonPath("$.id").value(1))
 				.andExpect(jsonPath("$.username").value("mateo"))
-				.andExpect(jsonPath("$.passwordHash").doesNotExist())
-				.andExpect(jsonPath("$.password").doesNotExist());
+				.andExpect(jsonPath("$.proveedor").value("password"))
+				.andExpect(jsonPath("$.uid").doesNotExist())
+				.andExpect(jsonPath("$.password").doesNotExist())
+				.andExpect(jsonPath("$.passwordHash").doesNotExist());
 	}
 
 	@Test
@@ -48,7 +50,7 @@ class RegistroControllerTest {
 		mockMvc.perform(post("/api/v1/registro")
 						.contentType(MediaType.APPLICATION_JSON)
 						.content("""
-								{"username":"m","email":"no-es-email","password":"corta"}
+								{"username":"m","email":"no-es-email","uid":"","proveedor":"no-existe"}
 								"""))
 				.andExpect(status().isBadRequest())
 				.andExpect(jsonPath("$.errors").isArray());
@@ -63,7 +65,7 @@ class RegistroControllerTest {
 		mockMvc.perform(post("/api/v1/registro")
 						.contentType(MediaType.APPLICATION_JSON)
 						.content("""
-								{"username":"mateo","email":"mateo@example.com","password":"secretpass"}
+								{"username":"mateo","email":"mateo@example.com","uid":"firebase-uid-1","proveedor":"password"}
 								"""))
 				.andExpect(status().isConflict())
 				.andExpect(jsonPath("$.title").value("Recurso duplicado"))
