@@ -59,11 +59,14 @@ se sobreescriben por variables de entorno:
 | `DB_USERNAME` | `chat_registro_svc` | Usuario propio del servicio |
 | `DB_PASSWORD` | `chat_registro_pw` | Contraseña de ese usuario |
 | `JPA_DDL_AUTO` | `validate` | `validate` \| `none` \| `update` \| `create` \| `create-drop` |
+| `CORS_ALLOWED_ORIGINS` | `http://localhost:3000` | Orígenes permitidos para `/api/**`. Lista separada por comas, cada uno `esquema://host:puerto` sin barra final. Vacío = ninguna petición cross-origin aceptada. |
+| `CORS_ALLOW_CREDENTIALS` | `false` | Permitir cookies/credenciales cross-origin (incompatible con origen `*`). |
 
 Para desarrollo local hay un fichero **`.env`** (plantilla en [`.env.example`](.env.example),
 no se versiona):
 
-- `./gradlew bootRun` lo carga automáticamente (lógica en `build.gradle`).
+- `./gradlew bootRun` lo carga automáticamente (lógica en `build.gradle`); una variable ya
+  presente en el entorno real tiene prioridad sobre la del `.env`.
 - Docker: `docker run --env-file .env chat-registro`.
 - Primera vez: `cp .env.example .env` y ajusta lo que necesites.
 
@@ -111,6 +114,8 @@ com.arquetipo.demo
 ├── DemoApplication.java
 ├── common/                              infraestructura transversal
 │   ├── config/JpaAuditingConfig.java        auditoría (createdAt/updatedAt)
+│   ├── config/CorsProperties.java           binding de `app.cors.*` (CORS_ALLOWED_ORIGINS)
+│   ├── config/CorsConfig.java               habilita CORS para /api/**
 │   ├── exception/
 │   │   ├── ResourceNotFoundException        → 404
 │   │   └── DuplicateResourceException       → 409

@@ -22,7 +22,7 @@ anotaciones.
 | Codificación | UTF-8 |
 | Fechas y horas | ISO-8601 en UTC, con precisión de microsegundos — ej. `2026-09-09T03:13:36.766818Z` |
 | Autenticación | **Ninguna** por ahora. El registro es un endpoint público. |
-| CORS | No configurado en el servicio; se resuelve en el API gateway / reverse proxy. |
+| CORS | Habilitado para `/api/**`. Orígenes permitidos vía `CORS_ALLOWED_ORIGINS` (lista separada por comas). Métodos `GET,POST,PUT,PATCH,DELETE,OPTIONS`; sin credenciales por defecto (`CORS_ALLOW_CREDENTIALS=false`). Un origen fuera de la lista recibe `403` sin cabeceras `Access-Control-*`. |
 
 ### Entornos
 

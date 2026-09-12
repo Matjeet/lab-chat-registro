@@ -32,6 +32,13 @@ spring:
         max-page-size: 100
         one-indexed-parameters: false
 
+app:
+  cors:
+    # Origenes permitidos para /api/**. Lista separada por comas, cada uno con esquema +
+    # host + puerto y SIN barra final (p. ej. "https://chat.example.com,http://localhost:3000").
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000}
+    allow-credentials: ${CORS_ALLOW_CREDENTIALS:false}
+
 server:
   port: 8080
   error:
