@@ -2,10 +2,14 @@ package com.arquetipo.demo.security;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.arquetipo.demo.registro.domain.ProveedorAuth;
+import com.arquetipo.demo.registro.identidad.ProveedorIdentidad;
+import com.arquetipo.demo.registro.identidad.UsuarioExterno;
 import com.arquetipo.demo.registro.repository.ProveedorAuthRepository;
 import com.arquetipo.demo.registro.repository.UsuarioRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -16,6 +20,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -31,6 +36,8 @@ import org.springframework.transaction.annotation.Transactional;
 @Transactional
 class A03InjectionTest {
 
+	private static final String PASSWORD_VALIDA = "Passw0rd!23";
+
 	@Autowired
 	private MockMvc mockMvc;
 
@@ -40,13 +47,20 @@ class A03InjectionTest {
 	@Autowired
 	private ProveedorAuthRepository proveedorAuthRepository;
 
+	@MockitoBean
+	private ProveedorIdentidad proveedorIdentidad;
+
 	@BeforeEach
-	void seedProveedor() {
+	void seedProveedorYStubs() {
 		if (proveedorAuthRepository.findByNombreIgnoreCase("password").isEmpty()) {
 			ProveedorAuth proveedor = new ProveedorAuth();
 			proveedor.setNombre("password");
 			proveedorAuthRepository.saveAndFlush(proveedor);
 		}
+		when(proveedorIdentidad.nombreProveedor()).thenReturn("password");
+		// Un UID unico y deterministico por email, para no chocar entre altas del mismo test.
+		when(proveedorIdentidad.crearUsuario(anyString(), anyString()))
+				.thenAnswer(inv -> new UsuarioExterno("fb-" + inv.getArgument(0)));
 	}
 
 	@ParameterizedTest
@@ -61,8 +75,8 @@ class A03InjectionTest {
 	void registro_payloadDeInyeccionEnUsername_seRechazaSinError(String payload) throws Exception {
 		// Arrange
 		String body = """
-				{"username":%s,"email":"inj@example.com","uid":"fb-inj-username","proveedor":"password"}
-				""".formatted(toJson(payload));
+				{"username":%s,"email":"inj@example.com","password":"%s"}
+				""".formatted(toJson(payload), PASSWORD_VALIDA);
 
 		// Act
 		int statusCode = mockMvc.perform(post("/api/v1/registro")
@@ -82,8 +96,8 @@ class A03InjectionTest {
 	void registro_payloadDeInyeccionEnEmail_nuncaProvocaErrorDeServidor(String payload) throws Exception {
 		// Arrange
 		String body = """
-				{"username":"injmail","email":%s,"uid":"fb-inj-email","proveedor":"password"}
-				""".formatted(toJson(payload));
+				{"username":"injmail","email":%s,"password":"%s"}
+				""".formatted(toJson(payload), PASSWORD_VALIDA);
 
 		// Act
 		int statusCode = mockMvc.perform(post("/api/v1/registro")
@@ -91,27 +105,6 @@ class A03InjectionTest {
 				.andReturn().getResponse().getStatus();
 
 		// Assert: la validacion lo rechaza o se guarda como literal, pero JAMAS es un 5xx
-		assertThat(statusCode).isLessThan(500);
-	}
-
-	@ParameterizedTest
-	@ValueSource(strings = {
-			"' OR '1'='1",
-			"'; DROP TABLE proveedores_auth; --"
-	})
-	void registro_payloadDeInyeccionEnUid_seRechazaSinError(String payload) throws Exception {
-		// Arrange
-		String body = """
-				{"username":"injuid","email":"injuid@example.com","uid":%s,"proveedor":"password"}
-				""".formatted(toJson(payload));
-
-		// Act
-		int statusCode = mockMvc.perform(post("/api/v1/registro")
-						.contentType(MediaType.APPLICATION_JSON).content(body))
-				.andReturn().getResponse().getStatus();
-
-		// Assert: nunca un error de servidor; el uid se guarda como literal si pasa
-		// la validacion de formato (solo longitud, no hay @Pattern), o se rechaza con 400.
 		assertThat(statusCode).isLessThan(500);
 	}
 
@@ -134,16 +127,14 @@ class A03InjectionTest {
 		// Arrange: lanzar un payload destructivo
 		mockMvc.perform(post("/api/v1/registro").contentType(MediaType.APPLICATION_JSON)
 				.content("""
-						{"username":"'; DROP TABLE usuarios; --","email":"x@x.com",
-						 "uid":"fb-destructivo","proveedor":"password"}
-						"""));
+						{"username":"'; DROP TABLE usuarios; --","email":"x@x.com","password":"%s"}
+						""".formatted(PASSWORD_VALIDA)));
 
 		// Act: un alta legitima posterior
 		mockMvc.perform(post("/api/v1/registro").contentType(MediaType.APPLICATION_JSON)
 						.content("""
-								{"username":"legitimo","email":"legitimo@example.com",
-								 "uid":"fb-legitimo","proveedor":"password"}
-								"""))
+								{"username":"legitimo","email":"legitimo@example.com","password":"%s"}
+								""".formatted(PASSWORD_VALIDA)))
 				.andExpect(status().isCreated());
 
 		// Assert: la tabla existe y solo tiene el registro valido

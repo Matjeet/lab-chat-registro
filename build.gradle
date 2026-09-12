@@ -42,6 +42,9 @@ dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-flyway'
 	runtimeOnly 'org.flywaydb:flyway-mysql'
 
+	// --- Identidad (Firebase Auth como proveedor externo) ---
+	implementation 'com.google.firebase:firebase-admin:9.4.3'
+
 	// --- Observabilidad ---
 	implementation 'org.springframework.boot:spring-boot-starter-actuator'
 

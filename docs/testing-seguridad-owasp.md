@@ -11,27 +11,34 @@ Ejecución: `./gradlew test` (van incluidos en la suite normal).
 
 | OWASP | Estado | Clase de test | Qué comprueba |
 |---|---|---|---|
-| **A01 – Broken Access Control** | ⚠️ Gap conocido | *(ver nota)* | El servicio delega la autenticación en Firebase Auth pero **todavía no verifica el ID token**: `uid`/`proveedor` se confían tal cual del body de `POST /api/v1/registro`. Se cubre indirectamente: A05 verifica que Actuator no expone endpoints administrativos. Ver nota. |
-| **A02 – Cryptographic Failures** | ✅ (alcance reducido) | `A02CryptographicFailuresTest` | El servicio ya **no gestiona contraseñas** (las guarda Firebase); los tests son una guarda de regresión: la entidad `Usuario` no tiene ningún campo de credenciales y un `password` enviado en el body se ignora (no se persiste ni se devuelve). |
-| **A03 – Injection** | ✅ | `A03InjectionTest` | Payloads SQLi / scripting en `username`, `email` y `uid` se rechazan en validación (400) o nunca provocan un 5xx; las consultas del repositorio están parametrizadas (un valor con sintaxis SQL se trata como literal); la tabla sigue operativa tras los intentos. |
-| **A04 – Insecure Design** | ✅ | `A04AccountEnumerationTest` | Resistencia a **enumeración de cuentas**: un conflicto de `username`, de `email` o de `uid` devuelven una respuesta byte-idéntica (salvo `timestamp`); la respuesta no incluye el campo que colisionó ni el valor enviado. |
+| **A01 – Broken Access Control** | ✅ (para este flujo) | *(ver nota)* | El UID y el proveedor de la cuenta los determina el servidor (llama él mismo a Firebase Auth); el cliente no puede asignarse un UID ni un proveedor arbitrarios porque ninguno de los dos es un campo de la petición. Se cubre indirectamente: A05 verifica que Actuator no expone endpoints administrativos. Ver nota sobre el alcance. |
+| **A02 – Cryptographic Failures** | ✅ | `A02CryptographicFailuresTest` | La contraseña en claro se reenvía al proveedor de identidad pero **nunca se persiste** (la entidad `Usuario` no tiene ningún campo de credenciales), **nunca se devuelve** en la respuesta, y **nunca aparece en el log del servidor**, ni siquiera cuando la petición se rechaza. |
+| **A03 – Injection** | ✅ | `A03InjectionTest` | Payloads SQLi / scripting en `username` y `email` se rechazan en validación (400) o nunca provocan un 5xx; las consultas del repositorio están parametrizadas (un valor con sintaxis SQL se trata como literal); la tabla sigue operativa tras los intentos. |
+| **A04 – Insecure Design** | ✅ | `A04AccountEnumerationTest` | Resistencia a **enumeración de cuentas**: un conflicto de `username`, de `email`, o un usuario que ya existe tanto en el proveedor de identidad como en la base local, devuelven una respuesta byte-idéntica (salvo `timestamp`); la respuesta no incluye el campo que colisionó ni el valor enviado. |
 | **A05 – Security Misconfiguration** | ✅ | `A05SecurityMisconfigurationTest` | Un error no controlado devuelve 500 **sin** mensaje interno ni stack trace (`trace`/`exception` ausentes, `detail` genérico); los endpoints de Actuator sensibles (`env`, `beans`, `configprops`, `heapdump`, `threaddump`, `mappings`, `loggers`, `scheduledtasks`) responden 404; `health` no revela componentes; los errores se sirven como `application/problem+json`. **CORS**: preflight y petición real desde un origen permitido llevan `Access-Control-Allow-Origin`; desde un origen fuera de la lista → 403 sin cabeceras `Access-Control-*`; sin `Access-Control-Allow-Credentials` por defecto. |
 | **A06 – Vulnerable & Outdated Components** | ⚠️ No desde tests | — | Se cubre con análisis de dependencias (p. ej. `gradle dependencyCheckAnalyze` / Dependabot / `gradle --refresh-dependencies` + escáner), no con tests unitarios. |
-| **A07 – Identification & Authentication Failures** | ✅ (alcance reducido) | `A07AuthenticationFailuresTest` | Ya no hay contraseña que validar aquí (la valida Firebase). Lo que este servicio garantiza: `uid` no vacío ni desproporcionado; `proveedor` (opcional, por defecto `password`) restringido a los providerId reales de Firebase Auth cuando se envía; formato de `username` — todo rechazado con 400 **antes de llegar a la capa de servicio** si no cumple. Ver nota del gap de verificación de token. |
+| **A07 – Identification & Authentication Failures** | ✅ | `A07AuthenticationFailuresTest` | Política de contraseña aplicada en el borde, **antes** de reenviarla al proveedor de identidad: 8–20 caracteres, mayúscula, minúscula, número, carácter especial, y ningún carácter repetido 4 o más veces seguidas. Una contraseña que la viola se rechaza con 400 y **ni siquiera llega a la capa de servicio** (no se llama a Firebase con una contraseña que ya sabemos débil). También valida el formato de `username`. |
 | **A08 – Software & Data Integrity Failures** | ⚠️ No desde tests | — | Aplica a integridad del pipeline CI/CD y de artefactos (firmas, checksums de dependencias, `gradle --write-verification-metadata`). No hay lógica en la app que testear. |
-| **A09 – Security Logging & Monitoring Failures** | ✅ | `A09SecurityLoggingTest` | Un intento de registro rechazado deja rastro en el log (nivel `WARN`, con el campo y valor concretos), mientras el mensaje al cliente sigue siendo genérico. |
-| **A10 – Server-Side Request Forgery (SSRF)** | ➖ N/A | — | El servicio no realiza peticiones HTTP salientes a partir de datos del usuario. |
+| **A09 – Security Logging & Monitoring Failures** | ✅ | `A09SecurityLoggingTest` | Un intento de registro rechazado —local, o porque el proveedor de identidad ya tenía el email, o por un fallo genérico del proveedor— deja rastro en el log (`WARN`/`ERROR`, con el motivo real), mientras el mensaje al cliente sigue siendo genérico. La contraseña no aparece en el log en ninguno de esos casos. |
+| **A10 – Server-Side Request Forgery (SSRF)** | ➖ N/A | — | Las llamadas salientes del servicio son al SDK de administración de Firebase (`FirebaseAuth`), no a URLs derivadas de datos del usuario. |
 
 ## Notas
 
-- **A01/A07 — gap de seguridad deliberado, pendiente:** `POST /api/v1/registro` no verifica el
-  ID token de Firebase; confía en `uid` y `proveedor` del body. Antes de exponer el
-  servicio fuera de desarrollo hace falta un filtro que valide `Authorization: Bearer <idToken>`
-  (Firebase Admin SDK, o un Resource Server con el JWK de Firebase) y derive esos dos valores
-  del token verificado. Cuando se añada, aquí van los tests de: token ausente/expirado/inválido
-  → 401, token de otro proyecto de Firebase → 401, y que `uid` del token siempre
-  coincide con el de la fila creada (no se puede registrar a nombre de otro UID).
-- **A02/A07 — alcance reducido a propósito:** la gestión de contraseñas (hash, política de
-  fortaleza, reset, MFA) es responsabilidad de Firebase Auth, no de este servicio. No tiene
-  sentido testear aquí una política de contraseñas que el código ya no implementa.
-- Los tests de integración usan H2 en memoria (perfil de test), no requieren MySQL.
+- **A01 — alcance de este veredicto:** el UID y el proveedor no se pueden falsificar porque no
+  son campos de `RegistroRequest` (el servidor los obtiene el mismo al llamar a Firebase). Esto
+  **no** sustituye a control de acceso en endpoints futuros que requieran demostrar identidad
+  (p. ej. "editar mi propio perfil"): esos necesitarán verificar `Authorization: Bearer
+  <idToken>` con Firebase Admin SDK, y ahí es donde irán los tests de acceso propiamente dichos.
+- **A02/A07 — quién valida qué:** este servicio impone su propia política de contraseña en el
+  borde (evita reenviar al proveedor una contraseña ya sabida débil), pero Firebase aplica la
+  suya también al crear la cuenta; ambas capas son independientes y pueden divergir con el
+  tiempo. La contraseña en si nunca se guarda aquí: la gestiona Firebase.
+- **Compensación y reconciliación (A04/A09):** si Firebase crea el usuario pero el guardado
+  local falla, el servicio borra ese usuario en Firebase (evita huérfanos) y responde el mismo
+  409 genérico. Si Firebase dice que el email ya existe pero la base local no tiene fila para
+  él, el servicio la crea (reconciliación) y responde 201, no un error — ver
+  `RegistroService`/`docs/contratos-api.md` §6 para el detalle completo.
+- Los tests de integración usan H2 en memoria (perfil de test), no requieren MySQL ni
+  credenciales reales de Firebase: `firebase.enabled=false` en el perfil de test evita que el
+  contexto intente inicializar el SDK, y cada test aporta su propio `ProveedorIdentidad` de
+  prueba con `@MockitoBean`.

@@ -25,11 +25,12 @@ public interface RegistroApi {
 	@Operation(
 			summary = "Registrar un usuario",
 			description = """
-					Completa el alta de un usuario que ya se autentico con Firebase Auth. El
-					`username` y el `email` deben ser unicos (no se distinguen mayusculas de
-					minusculas) y el `email` se normaliza a minusculas antes de guardarlo. El
-					`uid` identifica la cuenta de Firebase; el `proveedor` es opcional (por
-					defecto `password`). El servicio no gestiona contrasenas.
+					Crea al usuario primero en el proveedor de identidad (Firebase Auth, con
+					`email` + `password`) y despues persiste el perfil de dominio. El `username`
+					y el `email` deben ser unicos (no se distinguen mayusculas de minusculas) y
+					el `email` se normaliza a minusculas antes de guardarlo. El UID y el
+					proveedor los determina el servidor: no son campos de la peticion. La
+					contrasena solo se reenvia al proveedor, este servicio no la guarda.
 					""")
 	@ApiResponses({
 			@ApiResponse(
@@ -62,7 +63,7 @@ public interface RegistroApi {
 									  "detail": "El cuerpo de la peticion no supero la validacion",
 									  "instance": "/api/v1/registro",
 									  "errors": [
-									    { "field": "email", "message": "debe ser una direccion de correo electronico con formato correcto" }
+									    { "field": "password", "message": "debe tener mayuscula, minuscula, numero y caracter especial, y ningun caracter repetido 4 o mas veces seguidas" }
 									  ]
 									}
 									"""))),

@@ -24,10 +24,11 @@ import org.springframework.test.web.servlet.MockMvc;
 /**
  * OWASP A07:2021 - Identification and Authentication Failures.
  *
- * <p>La autenticacion en si la hace Firebase Auth; lo que este servicio debe garantizar es
- * que no acepta una identidad mal formada: un {@code uid} vacio o desproporcionado, un
- * {@code proveedor} que no sea uno de los soportados, o un {@code username} con formato
- * invalido, se rechazan con 400 antes de llegar a la capa de servicio.
+ * <p>La contrasena la sigue validando el proveedor de identidad al crear la cuenta, pero
+ * este servicio impone su propia politica en el borde (para no reenviar al proveedor, ni una
+ * sola vez, una contrasena que ya sabemos debil): 8-20 caracteres, mayuscula, minuscula,
+ * numero, caracter especial y sin 4+ repeticiones seguidas del mismo caracter. Tambien se
+ * valida el formato de `username`.
  */
 @WebMvcTest(RegistroController.class)
 class A07AuthenticationFailuresTest {
@@ -39,75 +40,44 @@ class A07AuthenticationFailuresTest {
 	private RegistroService registroService;
 
 	@ParameterizedTest
-	@ValueSource(strings = {"", " "})
-	void registro_uidVacio_seRechaza(String vacio) throws Exception {
+	@ValueSource(strings = {
+			"Aa1!",                  // 4 caracteres: mas corta que el minimo (8)
+			"Passw0rd!23456789ABCD", // 21 caracteres: mas larga que el maximo (20)
+			"passw0rd!23",           // sin mayuscula
+			"PASSW0RD!23",           // sin minuscula
+			"Password!AB",           // sin numero
+			"Passw0rd123",           // sin caracter especial
+			"Paaaa0rd!23",           // "aaaa": 4 repeticiones seguidas del mismo caracter
+	})
+	void registro_contrasenaQueViolaLaPolitica_seRechaza(String contrasenaInvalida) throws Exception {
 		// Arrange
 		String body = """
-				{"username":"usuario","email":"usuario@example.com","uid":%s,"proveedor":"password"}
-				""".formatted(json(vacio));
+				{"username":"usuario","email":"usuario@example.com","password":"%s"}
+				""".formatted(contrasenaInvalida);
 
 		// Act + Assert
 		mockMvc.perform(post("/api/v1/registro").contentType(MediaType.APPLICATION_JSON).content(body))
 				.andExpect(status().isBadRequest())
-				.andExpect(jsonPath("$.errors[*].field", org.hamcrest.Matchers.hasItem("uid")));
-		verify(registroService, never()).registrar(any());
-	}
-
-	@Test
-	void registro_uidMasLargoQueElMaximo_seRechaza() throws Exception {
-		// Arrange
-		String uidLargo = "a".repeat(129);
-		String body = """
-				{"username":"usuario","email":"usuario@example.com","uid":"%s","proveedor":"password"}
-				""".formatted(uidLargo);
-
-		// Act + Assert
-		mockMvc.perform(post("/api/v1/registro").contentType(MediaType.APPLICATION_JSON).content(body))
-				.andExpect(status().isBadRequest());
+				.andExpect(jsonPath("$.errors[*].field", org.hamcrest.Matchers.hasItem("password")));
 		verify(registroService, never()).registrar(any());
 	}
 
 	@ParameterizedTest
-	@ValueSource(strings = {"", "linkedin.com", "PASSWORD", "password ", "'; DROP TABLE proveedores_auth; --"})
-	void registro_proveedorEnviadoPeroNoSoportado_seRechaza(String proveedorInvalido) throws Exception {
+	@ValueSource(strings = {
+			"Passw0r!",     // 8 caracteres: minimo exacto
+			"Paaa0rd!23",   // "aaa": 3 repeticiones seguidas SI estan permitidas
+			"Passw0rd!23Passw0rd!", // 20 caracteres: maximo exacto
+	})
+	void registro_contrasenaQueCumpleLaPolitica_pasaLaValidacion(String contrasenaValida) throws Exception {
 		// Arrange
-		String body = """
-				{"username":"usuario","email":"usuario@example.com","uid":"fb-usuario","proveedor":%s}
-				""".formatted(json(proveedorInvalido));
-
-		// Act + Assert
-		mockMvc.perform(post("/api/v1/registro").contentType(MediaType.APPLICATION_JSON).content(body))
-				.andExpect(status().isBadRequest());
-		verify(registroService, never()).registrar(any());
-	}
-
-	@ParameterizedTest
-	@ValueSource(strings = {"password", "google.com", "facebook.com", "apple.com",
-			"github.com", "twitter.com", "phone", "anonymous"})
-	void registro_cualquierProveedorSoportado_pasaLaValidacion(String proveedorValido) throws Exception {
-		// Arrange
-		when(registroService.registrar(any()))
-				.thenReturn(new RegistroResponse(1L, "usuario", "usuario@example.com", proveedorValido, true, Instant.now()));
-		String body = """
-				{"username":"usuario","email":"usuario@example.com","uid":"fb-usuario","proveedor":%s}
-				""".formatted(json(proveedorValido));
-
-		// Act + Assert
-		mockMvc.perform(post("/api/v1/registro").contentType(MediaType.APPLICATION_JSON).content(body))
-				.andExpect(status().isCreated());
-	}
-
-	@Test
-	void registro_sinProveedorEnElCuerpo_pasaLaValidacion() throws Exception {
-		// Arrange: el frontend actual no manda "proveedor"; el servicio asumira "password"
 		when(registroService.registrar(any()))
 				.thenReturn(new RegistroResponse(1L, "usuario", "usuario@example.com", "password", true, Instant.now()));
+		String body = """
+				{"username":"usuario","email":"usuario@example.com","password":"%s"}
+				""".formatted(contrasenaValida);
 
 		// Act + Assert
-		mockMvc.perform(post("/api/v1/registro").contentType(MediaType.APPLICATION_JSON)
-						.content("""
-								{"username":"usuario","email":"usuario@example.com","uid":"fb-usuario"}
-								"""))
+		mockMvc.perform(post("/api/v1/registro").contentType(MediaType.APPLICATION_JSON).content(body))
 				.andExpect(status().isCreated());
 	}
 
@@ -116,7 +86,7 @@ class A07AuthenticationFailuresTest {
 	void registro_usernameConFormatoInvalido_seRechaza(String invalido) throws Exception {
 		// Arrange
 		String body = """
-				{"username":%s,"email":"usuario@example.com","uid":"fb-usuario","proveedor":"password"}
+				{"username":%s,"email":"usuario@example.com","password":"Passw0rd!23"}
 				""".formatted(json(invalido));
 
 		// Act + Assert

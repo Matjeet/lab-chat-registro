@@ -1,6 +1,12 @@
 # Configuracion exclusiva de tests: base H2 en memoria, sin dependencia de MySQL.
 # Flyway se desactiva: las migraciones son SQL de MySQL y el esquema de tests lo genera
 # Hibernate (create-drop) a partir de las entidades.
+firebase:
+  # Sin esto, el contexto de Spring intentaria inicializar el SDK real de Firebase (necesita
+  # credenciales) en cualquier test que cargue el contexto completo (@SpringBootTest). Esos
+  # tests aportan su propio ProveedorIdentidad de prueba con @MockitoBean.
+  enabled: false
+
 spring:
   flyway:
     enabled: false

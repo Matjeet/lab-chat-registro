@@ -34,7 +34,7 @@ class RegistroControllerTest {
 		mockMvc.perform(post("/api/v1/registro")
 						.contentType(MediaType.APPLICATION_JSON)
 						.content("""
-								{"username":"mateo","email":"mateo@example.com","uid":"firebase-uid-1","proveedor":"password"}
+								{"username":"mateo","email":"mateo@example.com","password":"Passw0rd!23"}
 								"""))
 				.andExpect(status().isCreated())
 				.andExpect(jsonPath("$.id").value(1))
@@ -50,7 +50,7 @@ class RegistroControllerTest {
 		mockMvc.perform(post("/api/v1/registro")
 						.contentType(MediaType.APPLICATION_JSON)
 						.content("""
-								{"username":"m","email":"no-es-email","uid":"","proveedor":"no-existe"}
+								{"username":"m","email":"no-es-email","password":"corta"}
 								"""))
 				.andExpect(status().isBadRequest())
 				.andExpect(jsonPath("$.errors").isArray());
@@ -65,7 +65,7 @@ class RegistroControllerTest {
 		mockMvc.perform(post("/api/v1/registro")
 						.contentType(MediaType.APPLICATION_JSON)
 						.content("""
-								{"username":"mateo","email":"mateo@example.com","uid":"firebase-uid-1","proveedor":"password"}
+								{"username":"mateo","email":"mateo@example.com","password":"Passw0rd!23"}
 								"""))
 				.andExpect(status().isConflict())
 				.andExpect(jsonPath("$.title").value("Recurso duplicado"))

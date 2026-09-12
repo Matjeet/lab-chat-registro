@@ -32,6 +32,14 @@ spring:
         max-page-size: 100
         one-indexed-parameters: false
 
+firebase:
+  # Firebase Auth como proveedor de identidad externo (com.arquetipo.demo.registro.identidad).
+  # false desactiva por completo la inicializacion del SDK (los tests lo hacen).
+  enabled: ${FIREBASE_ENABLED:true}
+  # Ruta a la clave de la cuenta de servicio (JSON descargado de la consola de Firebase).
+  # Vacio = usar las credenciales por defecto del entorno (ADC / GOOGLE_APPLICATION_CREDENTIALS).
+  credentials-path: ${FIREBASE_CREDENTIALS_PATH:}
+
 app:
   cors:
     # Origenes permitidos para /api/**. Lista separada por comas, cada uno con esquema +

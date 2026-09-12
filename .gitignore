@@ -6,6 +6,10 @@ build/
 .env
 .env.*
 !.env.example
+
+### Credenciales de Firebase (clave de cuenta de servicio: JAMAS se versiona) ###
+firebase-service-account*.json
+*firebase-adminsdk*.json
 !gradle/wrapper/gradle-wrapper.jar
 !**/src/main/**/build/
 !**/src/test/**/build/

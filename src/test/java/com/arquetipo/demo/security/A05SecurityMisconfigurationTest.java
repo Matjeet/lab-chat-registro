@@ -58,7 +58,7 @@ class A05SecurityMisconfigurationTest {
 		String cuerpo = mockMvc.perform(post("/api/v1/registro")
 						.contentType(MediaType.APPLICATION_JSON)
 						.content("""
-								{"username":"quiebra","email":"quiebra@example.com","uid":"fb-quiebra","proveedor":"password"}
+								{"username":"quiebra","email":"quiebra@example.com","password":"Passw0rd!23"}
 								"""))
 				.andExpect(status().isInternalServerError())
 				.andExpect(jsonPath("$.trace").doesNotExist())
@@ -79,7 +79,7 @@ class A05SecurityMisconfigurationTest {
 	void errores_seSirvenComoProblemJson() throws Exception {
 		// Arrange
 		String cuerpoInvalido = """
-				{"username":"x","email":"no-email","uid":"","proveedor":"no-soportado"}
+				{"username":"x","email":"no-email","password":"corta"}
 				""";
 
 		// Act + Assert
@@ -165,7 +165,7 @@ class A05SecurityMisconfigurationTest {
 						.header(HttpHeaders.ORIGIN, ORIGEN_PERMITIDO)
 						.contentType(MediaType.APPLICATION_JSON)
 						.content("""
-								{"username":"corsok","email":"corsok@example.com","uid":"fb-corsok","proveedor":"password"}
+								{"username":"corsok","email":"corsok@example.com","password":"Passw0rd!23"}
 								"""))
 				.andExpect(status().isCreated())
 				.andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, ORIGEN_PERMITIDO));
@@ -178,7 +178,7 @@ class A05SecurityMisconfigurationTest {
 				.header(HttpHeaders.ORIGIN, ORIGEN_NO_PERMITIDO)
 				.contentType(MediaType.APPLICATION_JSON)
 				.content("""
-						{"username":"corsbad","email":"corsbad@example.com","uid":"fb-corsbad","proveedor":"password"}
+						{"username":"corsbad","email":"corsbad@example.com","password":"Passw0rd!23"}
 						"""));
 
 		// Assert

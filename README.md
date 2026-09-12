@@ -13,7 +13,7 @@ base de datos MySQL centralizada del sistema.
 | Build | Gradle (wrapper incluido) |
 | Persistencia | Spring Data JPA + Hibernate; MySQL (runtime), H2 en memoria (tests) |
 | Migraciones | Flyway (`spring-boot-starter-flyway` + `flyway-mysql`) |
-| Autenticación | Firebase Auth (externa). El servicio no gestiona contraseñas. |
+| Identidad | Firebase Auth (Admin SDK), tras el puerto `registro.identidad.ProveedorIdentidad`. El servicio no persiste contraseñas. |
 | Validación | Bean Validation (`spring-boot-starter-validation`) |
 | Errores | RFC 9457 *Problem Details* vía `@RestControllerAdvice` |
 | Docs API | springdoc-openapi + Swagger UI |
@@ -65,6 +65,8 @@ se sobreescriben por variables de entorno:
 | `JPA_DDL_AUTO` | `validate` | `validate` \| `none` \| `update` \| `create` \| `create-drop` |
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:3000` | Orígenes permitidos para `/api/**`. Lista separada por comas, cada uno `esquema://host:puerto` sin barra final. Vacío = ninguna petición cross-origin aceptada. |
 | `CORS_ALLOW_CREDENTIALS` | `false` | Permitir cookies/credenciales cross-origin (incompatible con origen `*`). |
+| `FIREBASE_ENABLED` | `true` | `false` desactiva el SDK de Firebase por completo. **Sin un proveedor de identidad la app no arranca** (`RegistroService` lo necesita); solo tiene sentido en `false` si vas a sustituirlo por otro bean tú mismo. |
+| `FIREBASE_CREDENTIALS_PATH` | *(vacío)* | Ruta al JSON de la cuenta de servicio de Firebase. Vacío = credenciales por defecto del entorno (ADC / `GOOGLE_APPLICATION_CREDENTIALS`). |
 
 Para desarrollo local hay un fichero **`.env`** (plantilla en [`.env.example`](.env.example),
 no se versiona):
@@ -79,10 +81,10 @@ necesitan MySQL.
 
 ## Flujo de registro
 
-La identidad la gestiona **Firebase Auth**: el cliente se autentica con el SDK de Firebase
-(email/password, Google, etc.) y luego llama a este endpoint para completar el alta del
-perfil de dominio. El servicio **no gestiona contraseñas** — no hay hash, no hay política de
-fortaleza de contraseña aquí, todo eso lo resuelve Firebase.
+Este servicio **llama a Firebase Auth**, no el cliente: recibe `username` + `email` +
+`password`, crea primero el usuario en Firebase (Admin SDK) y solo si eso funciona persiste
+el perfil de dominio. El UID y el proveedor los decide el servidor; no son campos de la
+petición. La contraseña en claro se reenvía a Firebase y **nunca se guarda** en este servicio.
 
 `POST /api/v1/registro`
 
@@ -90,33 +92,46 @@ fortaleza de contraseña aquí, todo eso lo resuelve Firebase.
 {
   "username": "mateo",
   "email": "mateo@example.com",
-  "uid": "aB3dEfGhIjKlMnOpQrStUvWxYz12",
-  "proveedor": "password"
+  "password": "Passw0rd!23"
 }
 ```
 
 - `username`: 3–50 caracteres, `[a-zA-Z0-9._-]`, único (sin distinguir mayúsculas).
 - `email`: formato válido, ≤255, único (se normaliza a minúsculas).
-- `uid`: 1–128 caracteres, el UID que Firebase asignó al autenticarse (`user.uid`). Único.
-- `proveedor` (**opcional**, por defecto `password`): uno exacto de los `providerId` de
-  Firebase Auth — `password`, `google.com`, `facebook.com`, `apple.com`, `github.com`,
-  `twitter.com`, `phone`, `anonymous` — resuelto contra la tabla auxiliar `proveedores_auth`
-  (FK `usuarios.proveedor_id`).
+- `password`: 8–20 caracteres; al menos una mayúscula, una minúscula, un número y un carácter
+  especial (cualquiera que no sea letra, número o espacio); ningún carácter repetido 4 o más
+  veces seguidas (`aaaa` no vale, `aaa` sí). Se valida aquí (para no reenviar al proveedor una
+  contraseña que ya sabemos débil) y de nuevo la aplica Firebase al crear la cuenta.
 
 Respuestas: `201` con el usuario creado · `409` si los datos entran en conflicto con una
-cuenta existente (username, email **o** uid) · `400` con lista `errors` si la
-validación falla.
+cuenta existente (username, email, o el usuario ya existente en Firebase) · `400` con lista
+`errors` si la validación falla.
 
 Por seguridad, el `409` devuelve **siempre el mismo mensaje genérico** (`"No se pudo
-completar el registro con los datos proporcionados"`), sin revelar qué campo colisionó ni
-el valor enviado. El detalle concreto queda solo en el log del servidor (`WARN`), para no
-facilitar la enumeración de cuentas.
+completar el registro con los datos proporcionados"`), sin revelar qué colisionó ni el valor
+enviado. El detalle concreto (incluido lo que reporte Firebase) queda solo en el log del
+servidor (`WARN`/`ERROR`), para no facilitar la enumeración de cuentas.
 
-> ⚠️ **Gap de seguridad pendiente:** el endpoint todavía no verifica el ID token de Firebase;
-> confía en `uid`/`proveedor` tal cual llegan en el body. Antes de usarlo fuera de
-> desarrollo hace falta un filtro que valide `Authorization: Bearer <idToken>` (Firebase Admin
-> SDK o un Resource Server con el JWK de Firebase) y derive esos dos valores del token
-> verificado. Ver `docs/testing-seguridad-owasp.md` (A01/A07).
+### Orquestación y compensación (`RegistroService`)
+
+1. Comprobaciones locales de unicidad (username, email) — evita llamar a Firebase si ya
+   sabemos que el alta no puede completarse.
+2. Crea el usuario en Firebase con `email` + `password`.
+3. Si Firebase dice que el email **ya existe**: se busca ese usuario en Firebase y se
+   **reconcilia** — si nuestra base no tiene fila para él (un alta anterior que falló a
+   medias, por ejemplo), se crea ahora y el alta termina en éxito; si ya la tiene, es un
+   conflicto real (409 genérico).
+4. Si Firebase creó el usuario pero **el guardado en la base de datos falla**, se **revierte**
+   (borra) el usuario recién creado en Firebase, para no dejarlo huérfano. En la rama de
+   reconciliación nunca se borra: ese usuario ya existía en Firebase antes de esta petición.
+
+### Abstracción del proveedor de identidad
+
+Toda la integración con Firebase vive en `com.arquetipo.demo.registro.identidad`, detrás de
+la interfaz `ProveedorIdentidad` (`crearUsuario` / `eliminarUsuario` / `buscarPorEmail` /
+`nombreProveedor`). `RegistroService` solo conoce esa interfaz: cambiar de proveedor de
+identidad (o añadir uno nuevo) es escribir una implementación nueva en un subpaquete
+(`identidad/firebase/` hoy), sin tocar la lógica de negocio del registro.
 
 El contrato completo (esquemas, ejemplos y códigos de respuesta) está documentado con
 anotaciones OpenAPI en la interfaz `RegistroApi` (que implementa el controlador) y en los
@@ -151,7 +166,15 @@ com.arquetipo.demo
     ├── repository/UsuarioRepository.java    existsBy… / findBy… ignorando mayúsculas
     ├── repository/ProveedorAuthRepository.java  findByNombreIgnoreCase
     ├── mapper/UsuarioMapper.java            entidad → RegistroResponse
-    ├── service/RegistroService.java         unicidad + resolucion del proveedor + persistencia
+    ├── identidad/                           puerto hacia el proveedor de identidad externo
+    │   ├── ProveedorIdentidad.java              interfaz: crearUsuario / eliminarUsuario / buscarPorEmail / nombreProveedor
+    │   ├── UsuarioExterno.java                  record (uid)
+    │   ├── ProveedorIdentidadException.java     fallo del proveedor → 500 generico
+    │   ├── UsuarioYaRegistradoException.java    dispara la reconciliacion en RegistroService
+    │   └── firebase/
+    │       ├── FirebaseAppConfig.java           inicializa el SDK (FirebaseApp/FirebaseAuth)
+    │       └── FirebaseProveedorIdentidad.java  implementacion sobre Firebase Admin SDK
+    ├── service/RegistroService.java         orquesta: unicidad local + proveedor + persistencia + compensacion
     └── web/
         ├── RegistroController.java          POST /api/v1/registro (enrutado + delegación)
         ├── RegistroApi.java                 contrato OpenAPI (anotaciones springdoc)
@@ -178,6 +201,12 @@ Flujo de una petición: `Controller` → `Service` (transacciones + reglas) → 
 > `gradle.properties`.
 >
 > Antes del primer arranque hay que provisionar el esquema (ver *Base de datos*).
+>
+> **El servicio necesita un proveedor de identidad para arrancar.** Con `FIREBASE_ENABLED=true`
+> hace falta una clave de cuenta de servicio real (`FIREBASE_CREDENTIALS_PATH`); si no,
+> `bootRun` falla explicando qué falta (`FirebaseApp`/credenciales o el bean `ProveedorIdentidad`).
+> Con `FIREBASE_ENABLED=false` el contexto tampoco arranca (`RegistroService` no tiene con qué
+> construirse) — solo tiene sentido si aportas tú mismo un bean `ProveedorIdentidad` alternativo.
 
 | Recurso | URL |
 |---------|-----|
@@ -220,4 +249,5 @@ Todas las respuestas de error siguen RFC 9457:
 | `DuplicateResourceException` | 409 |
 | Bean Validation (`@Valid`) | 400 con lista `errors` |
 | `DataIntegrityViolationException` | 409 |
+| `ProveedorIdentidadException` (fallo de Firebase que no es "ya existe") | 500 (mensaje genérico; el detalle real solo en logs) |
 | cualquier otra | 500 (mensaje genérico, traza solo en logs) |
