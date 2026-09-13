@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package com.arquetipo.demo.registro.grpc;
+
+option java_multiple_files = true;
+option java_package = "com.arquetipo.demo.registro.grpc";
+option java_outer_classname = "RegistroProto";
+
+// Espejo por gRPC de POST /api/v1/registro (ver RegistroController/RegistroApi). Mismo
+// contrato y mismo flujo (RegistroService); solo cambia el protocolo de transporte.
+service RegistroGrpcService {
+  rpc Registrar (RegistrarUsuarioRequest) returns (RegistrarUsuarioResponse);
+}
+
+// Mismos campos y las mismas reglas que RegistroRequest (web/dto/RegistroRequest.java):
+// username (3-50, solo letras/numeros/._-), email (formato valido, max 255), password
+// (8-20, mayuscula+minuscula+numero+especial, sin 4+ repetidos seguidos). La validacion la
+// aplica el servidor con el mismo Validator de Bean Validation, no la duplica este .proto.
+message RegistrarUsuarioRequest {
+  string username = 1;
+  string email = 2;
+  string password = 3;
+}
+
+// Mismos campos que RegistroResponse (web/dto/RegistroResponse.java). No expone el uid del
+// proveedor de identidad ni ningun dato de autenticacion.
+message RegistrarUsuarioResponse {
+  int64 id = 1;
+  string username = 2;
+  string email = 3;
+  string proveedor = 4;
+  bool activo = 5;
+  // Instant en formato ISO-8601 (mismo formato que la serializacion JSON de Instant en la
+  // respuesta REST), p. ej. "2026-09-08T20:53:47.441193Z".
+  string created_at = 6;
+}

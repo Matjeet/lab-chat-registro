@@ -141,8 +141,9 @@ DTO, y se explora desde Swagger UI.
 
 ## Documentación de la API
 
-- **Contratos para clientes** → [`docs/contratos-api.md`](docs/contratos-api.md) (request/response,
+- **Contratos para clientes (REST)** → [`docs/contratos-api.md`](docs/contratos-api.md) (request/response,
   errores, notas de integración para frontend, modelos TypeScript).
+- **Contrato gRPC (para otros servicios)** → [`docs/contrato-grpc-registro.md`](docs/contrato-grpc-registro.md).
 
 Con la aplicación levantada (`./gradlew bootRun`):
 
@@ -178,10 +179,20 @@ com.arquetipo.demo
     │       ├── FirebaseAppConfig.java           inicializa el SDK (FirebaseApp/FirebaseAuth)
     │       └── FirebaseProveedorIdentidad.java  implementacion sobre Firebase Admin SDK
     ├── service/RegistroService.java         orquesta: unicidad local + proveedor + persistencia + compensacion
-    └── web/
-        ├── RegistroController.java          POST /api/v1/registro (enrutado + delegación)
-        ├── RegistroApi.java                 contrato OpenAPI (anotaciones springdoc)
-        └── dto/RegistroRequest.java · RegistroResponse.java
+    ├── web/
+    │   ├── RegistroController.java          POST /api/v1/registro (enrutado + delegación)
+    │   ├── RegistroApi.java                 contrato OpenAPI (anotaciones springdoc)
+    │   └── dto/RegistroRequest.java · RegistroResponse.java
+    └── grpc/                                mismo contrato/flujo que web/, por gRPC (ver más abajo)
+        ├── RegistroGrpcController.java          rpc Registrar (delega en RegistroService, sin duplicar reglas)
+        └── RegistroGrpcMapper.java              traduce entre los DTO REST y los mensajes de registro.proto
+
+common/grpc/
+├── GrpcServerProperties.java             binding de `grpc.server.*` (puerto, enabled)
+├── GrpcServerConfig.java                 registra el servidor si grpc.server.enabled=true
+└── GrpcServerLifecycle.java              arranca/detiene el servidor gRPC con el ciclo de vida de Spring
+
+src/main/proto/registro.proto             contrato gRPC (servicio + mensajes), genera los stubs en build/generated
 
 src/main/resources/db
 ├── bootstrap.sql                            esquema + usuario (se ejecuta como root, 1 vez)
@@ -213,12 +224,54 @@ Flujo de una petición: `Controller` → `Service` (transacciones + reglas) → 
 
 | Recurso | URL |
 |---------|-----|
-| Registro | `POST` http://localhost:8080/api/v1/registro |
+| Registro (REST) | `POST` http://localhost:8080/api/v1/registro |
+| Registro (gRPC) | `localhost:9090`, `RegistroGrpcService/Registrar` (ver *Protocolo gRPC*) |
 | Swagger UI | http://localhost:8080/swagger-ui.html |
 | OpenAPI JSON | http://localhost:8080/v3/api-docs |
 | Actuator health | http://localhost:8080/actuator/health |
 
 Tests: `./gradlew test` · Empaquetar: `./gradlew bootJar` · Docker: `docker build -t chat-registro .`
+
+## Protocolo gRPC
+
+`registro/grpc/RegistroGrpcController` expone el **mismo contrato y el mismo flujo** que
+`RegistroController` (delega en el mismo `RegistroService`, no duplica reglas de negocio) por
+gRPC en vez de REST — el controller REST sigue existiendo tal cual, sin modificarse. El
+contrato vive en [`src/main/proto/registro.proto`](src/main/proto/registro.proto):
+
+```proto
+service RegistroGrpcService {
+  rpc Registrar (RegistrarUsuarioRequest) returns (RegistrarUsuarioResponse);
+}
+```
+
+- **Servidor**: embebido, se arranca/detiene con el ciclo de vida de Spring
+  (`common/grpc/GrpcServerLifecycle`), en un puerto TCP propio e independiente del HTTP
+  (`grpc.server.port`, por defecto `9090`; variable de entorno `GRPC_SERVER_PORT`).
+  `GRPC_SERVER_ENABLED=false` lo desactiva por completo (los tests ya lo hacen).
+- **Reflexión habilitada** (`io.grpc:grpc-services`): se puede probar sin tener el `.proto` a
+  mano, por ejemplo con [`grpcurl`](https://github.com/fullstorydev/grpcurl):
+  ```bash
+  grpcurl -plaintext -d '{"username":"mateo","email":"mateo@example.com","password":"Passw0rd!23"}' \
+    localhost:9090 com.arquetipo.demo.registro.grpc.RegistroGrpcService/Registrar
+  ```
+- **Validación**: como gRPC no pasa por Spring MVC, `RegistroGrpcController` valida a mano el
+  mismo `RegistroRequest` con el mismo `Validator` de Bean Validation — mismas reglas (incluida
+  la política de contraseña) en los dos protocolos.
+- **Errores** (mismo principio de mensaje genérico al cliente / detalle real solo en el log que
+  `GlobalExceptionHandler`):
+
+  | Situación | REST | gRPC |
+  |---|---|---|
+  | Validación fallida | 400 | `INVALID_ARGUMENT` |
+  | Username/email duplicado, o ya existente en el proveedor | 409 (mensaje genérico) | `ALREADY_EXISTS` (mismo mensaje genérico) |
+  | Error inesperado | 500 (mensaje genérico) | `INTERNAL` (mismo mensaje genérico) |
+
+- Generación de stubs: plugin `com.google.protobuf` (`./gradlew generateProto`), se ejecuta
+  automáticamente antes de compilar. **La cache de configuración de Gradle está desactivada**
+  (`gradle.properties`) porque ese plugin todavía no la soporta.
+- **Contrato para otro servicio consumidor** → [`docs/contrato-grpc-registro.md`](docs/contrato-grpc-registro.md)
+  (campos, mapeo de errores, ejemplo `grpcurl`/Java, cómo generar el stub del cliente).
 
 ## Tests
 
