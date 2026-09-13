@@ -71,8 +71,10 @@ se sobreescriben por variables de entorno:
 Para desarrollo local hay un fichero **`.env`** (plantilla en [`.env.example`](.env.example),
 no se versiona):
 
-- `./gradlew bootRun` lo carga automáticamente (lógica en `build.gradle`); una variable ya
-  presente en el entorno real tiene prioridad sobre la del `.env`.
+- Lo carga la propia aplicación al arrancar (`DotenvEnvironmentPostProcessor`, en
+  `common/env/`) — funciona igual con `./gradlew bootRun`, desde el IDE o como jar
+  (`java -jar`). Una variable ya presente en el entorno real tiene prioridad sobre la del
+  `.env`.
 - Docker: `docker run --env-file .env chat-registro`.
 - Primera vez: `cp .env.example .env` y ajusta lo que necesites.
 
@@ -156,6 +158,7 @@ com.arquetipo.demo
 │   ├── config/JpaAuditingConfig.java        auditoría (createdAt/updatedAt)
 │   ├── config/CorsProperties.java           binding de `app.cors.*` (CORS_ALLOWED_ORIGINS)
 │   ├── config/CorsConfig.java               habilita CORS para /api/**
+│   ├── env/DotenvEnvironmentPostProcessor.java  carga .env (Gradle, IDE o jar — ver META-INF/spring.factories)
 │   ├── exception/
 │   │   ├── ResourceNotFoundException        → 404
 │   │   └── DuplicateResourceException       → 409

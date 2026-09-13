@@ -1,0 +1,1 @@
+org.springframework.boot.EnvironmentPostProcessor=com.arquetipo.demo.common.env.DotenvEnvironmentPostProcessor
