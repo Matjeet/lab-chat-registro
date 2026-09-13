@@ -1,5 +1,6 @@
 package com.arquetipo.demo.registro.identidad.firebase;
 
+import com.google.api.client.http.apache.v2.ApacheHttpTransport;
 import com.google.auth.oauth2.GoogleCredentials;
 import com.google.firebase.FirebaseApp;
 import com.google.firebase.FirebaseOptions;
@@ -13,6 +14,12 @@ import org.springframework.context.annotation.Configuration;
 
 /**
  * Inicializa el SDK de administracion de Firebase.
+ *
+ * <p>Se usa Apache HttpClient como transporte en vez del {@code NetHttpTransport} por defecto
+ * (basado en {@code HttpURLConnection}): en algunos entornos la inspeccion de trafico de
+ * terceros (antivirus/EDR) corrompe la respuesta gzip cuando pasa por ese transporte por
+ * defecto ({@code java.util.zip.ZipException: Not in GZIP format}); Apache HttpClient maneja
+ * la descompresion por su cuenta y evita el problema.
  *
  * <p>Se puede desactivar por completo con {@code firebase.enabled=false} (los tests lo hacen,
  * ver {@code src/test/resources/application.yml}): en ese caso ni este bean ni
@@ -35,6 +42,7 @@ public class FirebaseAppConfig {
 				: GoogleCredentials.fromStream(new FileInputStream(credentialsPath));
 		FirebaseOptions opciones = FirebaseOptions.builder()
 				.setCredentials(credenciales)
+				.setHttpTransport(new ApacheHttpTransport())
 				.build();
 		return FirebaseApp.initializeApp(opciones);
 	}

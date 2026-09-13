@@ -44,6 +44,10 @@ dependencies {
 
 	// --- Identidad (Firebase Auth como proveedor externo) ---
 	implementation 'com.google.firebase:firebase-admin:9.4.3'
+	// Transporte HTTP alternativo (Apache HttpClient) para el SDK de Firebase: el transporte
+	// por defecto (NetHttpTransport, sobre HttpURLConnection) puede chocar con inspeccion de
+	// trafico de terceros en la maquina (antivirus/EDR) que corrompe la respuesta gzip.
+	implementation 'com.google.http-client:google-http-client-apache-v2:1.45.3'
 
 	// --- Observabilidad ---
 	implementation 'org.springframework.boot:spring-boot-starter-actuator'
