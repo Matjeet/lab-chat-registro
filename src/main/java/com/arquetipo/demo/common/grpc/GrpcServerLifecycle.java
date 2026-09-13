@@ -3,7 +3,7 @@ package com.arquetipo.demo.common.grpc;
 import io.grpc.BindableService;
 import io.grpc.Server;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
-import io.grpc.protobuf.services.ProtoReflectionService;
+import io.grpc.protobuf.services.ProtoReflectionServiceV1;
 import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -41,7 +41,7 @@ public class GrpcServerLifecycle implements SmartLifecycle {
 	public void start() {
 		try {
 			NettyServerBuilder builder = NettyServerBuilder.forPort(properties.getPort())
-					.addService(ProtoReflectionService.newInstance());
+					.addService(ProtoReflectionServiceV1.newInstance());
 			servicios.forEach(builder::addService);
 
 			server = builder.build().start();
