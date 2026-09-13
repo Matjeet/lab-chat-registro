@@ -27,7 +27,13 @@ repositories {
 
 ext {
 	springdocVersion = '3.1.1'
-	grpcVersion = '1.68.1'
+	// Debe coincidir con la version de io.grpc:grpc-core/grpc-api/grpc-context/grpc-util que
+	// fuerza el BOM de firebase-admin (google-cloud-core-grpc/gax-grpc): si no, grpc-netty-shaded
+	// se queda en una version de la API interna de grpc-core distinta a la que hay en el
+	// classpath en runtime y revienta con AbstractMethodError al arrancar el servidor. Verificar
+	// con `./gradlew dependencies --configuration runtimeClasspath | grep io.grpc` tras tocar la
+	// version de firebase-admin.
+	grpcVersion = '1.83.1'
 	protobufVersion = '4.28.2'
 }
 
