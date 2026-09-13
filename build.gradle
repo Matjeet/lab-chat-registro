@@ -2,6 +2,7 @@ plugins {
 	id 'java'
 	id 'org.springframework.boot' version '4.1.1'
 	id 'io.spring.dependency-management' version '1.1.7'
+	id 'com.google.protobuf' version '0.9.6'
 }
 
 group = 'com.arquetipo'
@@ -26,6 +27,8 @@ repositories {
 
 ext {
 	springdocVersion = '3.1.1'
+	grpcVersion = '1.68.1'
+	protobufVersion = '4.28.2'
 }
 
 dependencies {
@@ -55,6 +58,16 @@ dependencies {
 	// --- Documentacion de API (OpenAPI / Swagger UI) ---
 	implementation "org.springdoc:springdoc-openapi-starter-webmvc-ui:${springdocVersion}"
 
+	// --- gRPC (segundo protocolo de transporte para el mismo contrato de registro) ---
+	// El servidor se levanta a mano (com.arquetipo.demo.common.grpc), sin starter de terceros,
+	// para no atarse a la compatibilidad de un starter externo con esta version de Spring Boot.
+	implementation "io.grpc:grpc-netty-shaded:${grpcVersion}"
+	implementation "io.grpc:grpc-protobuf:${grpcVersion}"
+	implementation "io.grpc:grpc-stub:${grpcVersion}"
+	implementation "io.grpc:grpc-services:${grpcVersion}"  // habilita el servicio de reflexion (grpcurl sin .proto)
+	implementation "com.google.protobuf:protobuf-java:${protobufVersion}"
+	compileOnly 'jakarta.annotation:jakarta.annotation-api'  // @Generated en los stubs generados
+
 	// --- Utilidades de desarrollo ---
 	compileOnly 'org.projectlombok:lombok'
 	annotationProcessor 'org.projectlombok:lombok'
@@ -68,11 +81,31 @@ dependencies {
 	testCompileOnly 'org.projectlombok:lombok'
 	testAnnotationProcessor 'org.projectlombok:lombok'
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+	testImplementation "io.grpc:grpc-testing:${grpcVersion}"  // InProcessServerBuilder para probar el servicio gRPC sin red real
 }
 
 tasks.named('test') {
 	useJUnitPlatform()
 	// Los tests NO leen .env: corren siempre sobre H2 en memoria.
+}
+
+// Genera los stubs de gRPC/protobuf a partir de src/main/proto/*.proto (build/generated/source/proto).
+protobuf {
+	protoc {
+		artifact = "com.google.protobuf:protoc:${protobufVersion}"
+	}
+	plugins {
+		grpc {
+			artifact = "io.grpc:protoc-gen-grpc-java:${grpcVersion}"
+		}
+	}
+	generateProtoTasks {
+		all().configureEach {
+			plugins {
+				grpc {}
+			}
+		}
+	}
 }
 
 // La carga de .env vive DENTRO de la aplicacion (ver
