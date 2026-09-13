@@ -40,6 +40,14 @@ firebase:
   # Vacio = usar las credenciales por defecto del entorno (ADC / GOOGLE_APPLICATION_CREDENTIALS).
   credentials-path: ${FIREBASE_CREDENTIALS_PATH:}
 
+grpc:
+  server:
+    # Servidor gRPC embebido (com.arquetipo.demo.common.grpc), espejo del REST de registro.
+    # false desactiva por completo su arranque (los tests lo hacen, ver src/test/resources).
+    enabled: ${GRPC_SERVER_ENABLED:true}
+    # Puerto TCP propio, independiente de server.port (HTTP).
+    port: ${GRPC_SERVER_PORT:9090}
+
 app:
   cors:
     # Origenes permitidos para /api/**. Lista separada por comas, cada uno con esquema +
