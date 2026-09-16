@@ -18,7 +18,7 @@ La fuente de verdad ejecutable es el propio `.proto`:
 | Aspecto | Valor |
 |---|---|
 | Protocolo | gRPC (HTTP/2), **texto plano, sin TLS** (`-plaintext` en `grpcurl`, canal `usePlaintext()` en el cliente) |
-| Host:puerto (local) | `localhost:9090` — puerto propio e independiente del HTTP (`8080`) |
+| Host:puerto (local) | `localhost:9090` — puerto propio e independiente del HTTP (`8081`) |
 | Variable de entorno del servidor | `GRPC_SERVER_PORT` (por defecto `9090`); `GRPC_SERVER_ENABLED=false` apaga el servidor por completo |
 | Paquete proto | `com.arquetipo.demo.registro.grpc` |
 | Servicio | `RegistroGrpcService` |
@@ -26,7 +26,7 @@ La fuente de verdad ejecutable es el propio `.proto`:
 | Reflexión de servicio | Habilitada (`io.grpc:grpc-services`) — un cliente puede descubrir el contrato sin tener el `.proto`, ver §6 |
 | Autenticación | Ninguna, igual que el REST — es el propio alta |
 
-> El puerto real por entorno lo define infraestructura (igual que el `8080` del REST); en
+> El puerto real por entorno lo define infraestructura (igual que el `8081` del REST); en
 > producción probablemente vaya detrás de un proxy/gateway con TLS. Pregunta al equipo de
 > infraestructura la dirección de tu entorno si no es `localhost:9090`.
 

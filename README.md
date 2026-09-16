@@ -147,8 +147,8 @@ DTO, y se explora desde Swagger UI.
 
 Con la aplicación levantada (`./gradlew bootRun`):
 
-- **Swagger UI** → <http://localhost:8080/swagger-ui.html>
-- **OpenAPI JSON** → <http://localhost:8080/v3/api-docs>
+- **Swagger UI** → <http://localhost:8081/swagger-ui.html>
+- **OpenAPI JSON** → <http://localhost:8081/v3/api-docs>
 
 ## Estructura
 
@@ -224,11 +224,11 @@ Flujo de una petición: `Controller` → `Service` (transacciones + reglas) → 
 
 | Recurso | URL |
 |---------|-----|
-| Registro (REST) | `POST` http://localhost:8080/api/v1/registro |
+| Registro (REST) | `POST` http://localhost:8081/api/v1/registro |
 | Registro (gRPC) | `localhost:9090`, `RegistroGrpcService/Registrar` (ver *Protocolo gRPC*) |
-| Swagger UI | http://localhost:8080/swagger-ui.html |
-| OpenAPI JSON | http://localhost:8080/v3/api-docs |
-| Actuator health | http://localhost:8080/actuator/health |
+| Swagger UI | http://localhost:8081/swagger-ui.html |
+| OpenAPI JSON | http://localhost:8081/v3/api-docs |
+| Actuator health | http://localhost:8081/actuator/health |
 
 Tests: `./gradlew test` · Empaquetar: `./gradlew bootJar` · Docker: `docker build -t chat-registro .`
 

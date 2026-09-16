@@ -7,8 +7,8 @@ La fuente de verdad ejecutable es la especificación **OpenAPI** que genera el p
 servicio; este documento la resume y añade las notas de integración que no caben en las
 anotaciones.
 
-- Swagger UI: `http://<host>:8080/swagger-ui.html`
-- OpenAPI JSON: `http://<host>:8080/v3/api-docs`
+- Swagger UI: `http://<host>:8081/swagger-ui.html`
+- OpenAPI JSON: `http://<host>:8081/v3/api-docs`
 
 ---
 
@@ -28,8 +28,8 @@ anotaciones.
 
 | Entorno | Base URL |
 |---|---|
-| Local | `http://localhost:8080` |
-| Otros | definidos por infraestructura (el servicio escucha en el puerto `8080`) |
+| Local | `http://localhost:8081` |
+| Otros | definidos por infraestructura (el servicio escucha en el puerto `8081`) |
 
 ---
 
@@ -194,7 +194,7 @@ credenciales del propio servicio, etc.). Reintentable con backoff.
 #### Ejemplo `curl`
 
 ```bash
-curl -i -X POST http://localhost:8080/api/v1/registro \
+curl -i -X POST http://localhost:8081/api/v1/registro \
   -H 'Content-Type: application/json' \
   -d '{"username":"mateo","email":"mateo@example.com","password":"Passw0rd!23"}'
 ```
