@@ -26,7 +26,6 @@ repositories {
 }
 
 ext {
-	springdocVersion = '3.1.1'
 	// Debe coincidir con la version de io.grpc:grpc-core/grpc-api/grpc-context/grpc-util que
 	// fuerza el BOM de firebase-admin (google-cloud-core-grpc/gax-grpc): si no, grpc-netty-shaded
 	// se queda en una version de la API interna de grpc-core distinta a la que hay en el
@@ -60,9 +59,6 @@ dependencies {
 
 	// --- Observabilidad ---
 	implementation 'org.springframework.boot:spring-boot-starter-actuator'
-
-	// --- Documentacion de API (OpenAPI / Swagger UI) ---
-	implementation "org.springdoc:springdoc-openapi-starter-webmvc-ui:${springdocVersion}"
 
 	// --- gRPC (segundo protocolo de transporte para el mismo contrato de registro) ---
 	// El servidor se levanta a mano (com.arquetipo.demo.common.grpc), sin starter de terceros,

@@ -2,7 +2,6 @@ package com.arquetipo.demo.registro.grpc;
 
 import com.arquetipo.demo.common.exception.DuplicateResourceException;
 import com.arquetipo.demo.registro.service.RegistroService;
-import com.arquetipo.demo.registro.web.RegistroController;
 import com.arquetipo.demo.registro.web.dto.RegistroRequest;
 import com.arquetipo.demo.registro.web.dto.RegistroResponse;
 import io.grpc.Status;
@@ -16,26 +15,29 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 /**
- * Espejo por gRPC de {@link RegistroController}: mismo contrato ({@code username}/{@code
- * email}/{@code password} de entrada, mismo DTO de salida) y mismo flujo, delegando en el
- * mismo {@link RegistroService} — no se duplica logica de negocio, solo cambia el protocolo de
- * transporte. El REST sigue existiendo tal cual, sin tocarse.
+ * Punto de entrada del alta de usuarios: recibe {@code username}/{@code email}/{@code
+ * password}, delega en {@link RegistroService} (unica logica de negocio, sin duplicarla aqui)
+ * y devuelve el mismo DTO de siempre traducido a {@code RegistrarUsuarioResponse}. Es el unico
+ * protocolo que expone este servicio para el registro — el REST del sistema lo sirve
+ * {@code chat-gateway}, que reenvia aqui por gRPC (ver
+ * {@code docs/contrato-grpc-registro.md}).
  *
- * <p>Al no pasar por Spring MVC, la validacion de Bean Validation ({@code @Valid} en el
- * controller REST) se aplica aqui a mano con el mismo {@link Validator} sobre el mismo
- * {@link RegistroRequest}, así que las reglas (incluida la politica de contrasena) son
- * exactamente las mismas en los dos protocolos.
+ * <p>Al no pasar por Spring MVC no hay {@code @Valid} automatico: la validacion de Bean
+ * Validation se aplica aqui a mano con el mismo {@link Validator} sobre el mismo
+ * {@link RegistroRequest} que usa {@code RegistroService}, asi que las reglas (incluida la
+ * politica de contrasena) son la unica fuente de verdad, sin una capa REST/OpenAPI aparte que
+ * las repita.
  *
  * <p>Mapeo de errores (mismo principio de "mensaje generico al cliente, detalle real solo en
- * el log" que {@code GlobalExceptionHandler}):
+ * el log" que se aplicaba antes en el REST):
  * <ul>
- *   <li>Violacion de Bean Validation -&gt; {@code INVALID_ARGUMENT} (equivalente al 400 REST).</li>
+ *   <li>Violacion de Bean Validation -&gt; {@code INVALID_ARGUMENT}.</li>
  *   <li>{@link DuplicateResourceException} (username/email duplicado, o el usuario ya existente
  *       en el proveedor de identidad) -&gt; {@code ALREADY_EXISTS} con el mismo mensaje generico
- *       que ya lleva la excepcion (equivalente al 409 REST); el detalle real ya quedo en el log
- *       dentro de {@code RegistroService}.</li>
- *   <li>Cualquier otra excepcion -&gt; {@code INTERNAL} con un mensaje generico (equivalente al
- *       500 REST); la excepcion real se registra aqui, nunca se envia al cliente.</li>
+ *       que ya lleva la excepcion; el detalle real ya quedo en el log dentro de
+ *       {@code RegistroService}.</li>
+ *   <li>Cualquier otra excepcion -&gt; {@code INTERNAL} con un mensaje generico; la excepcion
+ *       real se registra aqui, nunca se envia al cliente.</li>
  * </ul>
  */
 @Slf4j

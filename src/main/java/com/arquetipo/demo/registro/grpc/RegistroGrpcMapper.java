@@ -5,12 +5,17 @@ import com.arquetipo.demo.registro.web.dto.RegistroResponse;
 import org.springframework.stereotype.Component;
 
 /**
- * Traduce entre los mensajes de {@code registro.proto} y los DTO REST existentes
- * ({@link RegistroRequest} / {@link RegistroResponse}), para que ambos protocolos compartan
- * exactamente el mismo contrato de validacion y el mismo flujo ({@code RegistroService}).
+ * Traduce entre los mensajes de {@code registro.proto} y los DTO del dominio
+ * ({@link RegistroRequest} / {@link RegistroResponse}), para que la validacion y el flujo
+ * ({@code RegistroService}) tengan una unica fuente de verdad.
+ *
+ * <p>Publica (no de paquete) para que los tests de seguridad
+ * ({@code src/test/java/com/arquetipo/demo/security/}) puedan construir un
+ * {@code RegistroGrpcController} sin levantar contexto de Spring, igual que hace
+ * {@code RegistroGrpcControllerTest}.
  */
 @Component
-class RegistroGrpcMapper {
+public class RegistroGrpcMapper {
 
 	RegistroRequest aRegistroRequest(RegistrarUsuarioRequest grpcRequest) {
 		return new RegistroRequest(grpcRequest.getUsername(), grpcRequest.getEmail(), grpcRequest.getPassword());

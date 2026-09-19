@@ -1,25 +1,27 @@
 package com.arquetipo.demo.security;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.arquetipo.demo.registro.grpc.CapturingStreamObserver;
+import com.arquetipo.demo.registro.grpc.RegistrarUsuarioRequest;
+import com.arquetipo.demo.registro.grpc.RegistrarUsuarioResponse;
+import com.arquetipo.demo.registro.grpc.RegistroGrpcController;
+import com.arquetipo.demo.registro.grpc.RegistroGrpcMapper;
 import com.arquetipo.demo.registro.service.RegistroService;
-import com.arquetipo.demo.registro.web.RegistroController;
 import com.arquetipo.demo.registro.web.dto.RegistroResponse;
+import io.grpc.Status;
+import jakarta.validation.Validation;
 import java.time.Instant;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
-import org.springframework.http.MediaType;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
-import org.springframework.test.web.servlet.MockMvc;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 
 /**
  * OWASP A07:2021 - Identification and Authentication Failures.
@@ -29,15 +31,24 @@ import org.springframework.test.web.servlet.MockMvc;
  * sola vez, una contrasena que ya sabemos debil): 8-20 caracteres, mayuscula, minuscula,
  * numero, caracter especial y sin 4+ repeticiones seguidas del mismo caracter. Tambien se
  * valida el formato de `username`.
+ *
+ * <p>Sin contexto de Spring (mockea solo {@code RegistroService}), igual que hacia el
+ * {@code @WebMvcTest} que este test usaba antes de que el registro pasara a servirse solo por
+ * gRPC.
  */
-@WebMvcTest(RegistroController.class)
+@ExtendWith(MockitoExtension.class)
 class A07AuthenticationFailuresTest {
 
-	@Autowired
-	private MockMvc mockMvc;
-
-	@MockitoBean
+	@Mock
 	private RegistroService registroService;
+
+	private RegistroGrpcController controller;
+
+	@BeforeEach
+	void construirController() {
+		controller = new RegistroGrpcController(registroService, new RegistroGrpcMapper(),
+				Validation.buildDefaultValidatorFactory().getValidator());
+	}
 
 	@ParameterizedTest
 	@ValueSource(strings = {
@@ -49,16 +60,19 @@ class A07AuthenticationFailuresTest {
 			"Passw0rd123",           // sin caracter especial
 			"Paaaa0rd!23",           // "aaaa": 4 repeticiones seguidas del mismo caracter
 	})
-	void registro_contrasenaQueViolaLaPolitica_seRechaza(String contrasenaInvalida) throws Exception {
+	void registro_contrasenaQueViolaLaPolitica_seRechaza(String contrasenaInvalida) {
 		// Arrange
-		String body = """
-				{"username":"usuario","email":"usuario@example.com","password":"%s"}
-				""".formatted(contrasenaInvalida);
+		CapturingStreamObserver<RegistrarUsuarioResponse> observer = new CapturingStreamObserver<>();
 
-		// Act + Assert
-		mockMvc.perform(post("/api/v1/registro").contentType(MediaType.APPLICATION_JSON).content(body))
-				.andExpect(status().isBadRequest())
-				.andExpect(jsonPath("$.errors[*].field", org.hamcrest.Matchers.hasItem("password")));
+		// Act
+		controller.registrar(RegistrarUsuarioRequest.newBuilder()
+				.setUsername("usuario").setEmail("usuario@example.com").setPassword(contrasenaInvalida)
+				.build(), observer);
+
+		// Assert
+		assertThat(observer.tieneError()).isTrue();
+		assertThat(observer.errorDeEstado().getStatus().getCode()).isEqualTo(Status.Code.INVALID_ARGUMENT);
+		assertThat(observer.errorDeEstado().getStatus().getDescription()).contains("password");
 		verify(registroService, never()).registrar(any());
 	}
 
@@ -68,34 +82,36 @@ class A07AuthenticationFailuresTest {
 			"Paaa0rd!23",   // "aaa": 3 repeticiones seguidas SI estan permitidas
 			"Passw0rd!23Passw0rd!", // 20 caracteres: maximo exacto
 	})
-	void registro_contrasenaQueCumpleLaPolitica_pasaLaValidacion(String contrasenaValida) throws Exception {
+	void registro_contrasenaQueCumpleLaPolitica_pasaLaValidacion(String contrasenaValida) {
 		// Arrange
 		when(registroService.registrar(any()))
 				.thenReturn(new RegistroResponse(1L, "usuario", "usuario@example.com", "password", true, Instant.now()));
-		String body = """
-				{"username":"usuario","email":"usuario@example.com","password":"%s"}
-				""".formatted(contrasenaValida);
+		CapturingStreamObserver<RegistrarUsuarioResponse> observer = new CapturingStreamObserver<>();
 
-		// Act + Assert
-		mockMvc.perform(post("/api/v1/registro").contentType(MediaType.APPLICATION_JSON).content(body))
-				.andExpect(status().isCreated());
+		// Act
+		controller.registrar(RegistrarUsuarioRequest.newBuilder()
+				.setUsername("usuario").setEmail("usuario@example.com").setPassword(contrasenaValida)
+				.build(), observer);
+
+		// Assert
+		assertThat(observer.tieneError()).isFalse();
+		assertThat(observer.valor()).isNotNull();
 	}
 
 	@ParameterizedTest
 	@ValueSource(strings = {"ab", "  ", "usuario con espacios", "e", "díéresis", "user@name", "../etc"})
-	void registro_usernameConFormatoInvalido_seRechaza(String invalido) throws Exception {
+	void registro_usernameConFormatoInvalido_seRechaza(String invalido) {
 		// Arrange
-		String body = """
-				{"username":%s,"email":"usuario@example.com","password":"Passw0rd!23"}
-				""".formatted(json(invalido));
+		CapturingStreamObserver<RegistrarUsuarioResponse> observer = new CapturingStreamObserver<>();
 
-		// Act + Assert
-		mockMvc.perform(post("/api/v1/registro").contentType(MediaType.APPLICATION_JSON).content(body))
-				.andExpect(status().isBadRequest());
+		// Act
+		controller.registrar(RegistrarUsuarioRequest.newBuilder()
+				.setUsername(invalido).setEmail("usuario@example.com").setPassword("Passw0rd!23")
+				.build(), observer);
+
+		// Assert
+		assertThat(observer.tieneError()).isTrue();
+		assertThat(observer.errorDeEstado().getStatus().getCode()).isEqualTo(Status.Code.INVALID_ARGUMENT);
 		verify(registroService, never()).registrar(any());
-	}
-
-	private static String json(String raw) {
-		return "\"" + raw.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
 	}
 }

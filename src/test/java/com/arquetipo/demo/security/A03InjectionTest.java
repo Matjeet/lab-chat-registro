@@ -4,42 +4,41 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.arquetipo.demo.registro.domain.ProveedorAuth;
+import com.arquetipo.demo.registro.grpc.CapturingStreamObserver;
+import com.arquetipo.demo.registro.grpc.RegistrarUsuarioRequest;
+import com.arquetipo.demo.registro.grpc.RegistrarUsuarioResponse;
+import com.arquetipo.demo.registro.grpc.RegistroGrpcController;
 import com.arquetipo.demo.registro.identidad.ProveedorIdentidad;
 import com.arquetipo.demo.registro.identidad.UsuarioExterno;
 import com.arquetipo.demo.registro.repository.ProveedorAuthRepository;
 import com.arquetipo.demo.registro.repository.UsuarioRepository;
+import io.grpc.Status;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
-import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
-import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
  * OWASP A03:2021 - Injection (SQLi / payloads de scripting).
  *
- * <p>Las cargas maliciosas se rechazan en validacion (nunca provocan un 500 ni se ejecutan)
- * y las consultas del repositorio estan parametrizadas (JPA), asi que un valor con sintaxis
- * SQL se trata como dato literal.
+ * <p>Las cargas maliciosas se rechazan en validacion (nunca provocan un fallo interno ni se
+ * ejecutan) y las consultas del repositorio estan parametrizadas (JPA), asi que un valor con
+ * sintaxis SQL se trata como dato literal.
  */
 @SpringBootTest
-@AutoConfigureMockMvc
 @Transactional
 class A03InjectionTest {
 
 	private static final String PASSWORD_VALIDA = "Passw0rd!23";
 
 	@Autowired
-	private MockMvc mockMvc;
+	private RegistroGrpcController controller;
 
 	@Autowired
 	private UsuarioRepository repository;
@@ -72,19 +71,18 @@ class A03InjectionTest {
 			"robert'); DROP TABLE usuarios;--",
 			"' UNION SELECT firebase_uid FROM usuarios --"
 	})
-	void registro_payloadDeInyeccionEnUsername_seRechazaSinError(String payload) throws Exception {
+	void registro_payloadDeInyeccionEnUsername_seRechazaSinError(String payload) {
 		// Arrange
-		String body = """
-				{"username":%s,"email":"inj@example.com","password":"%s"}
-				""".formatted(toJson(payload), PASSWORD_VALIDA);
+		CapturingStreamObserver<RegistrarUsuarioResponse> observer = new CapturingStreamObserver<>();
 
 		// Act
-		int statusCode = mockMvc.perform(post("/api/v1/registro")
-						.contentType(MediaType.APPLICATION_JSON).content(body))
-				.andReturn().getResponse().getStatus();
+		controller.registrar(RegistrarUsuarioRequest.newBuilder()
+				.setUsername(payload).setEmail("inj@example.com").setPassword(PASSWORD_VALIDA)
+				.build(), observer);
 
-		// Assert: se rechaza como cliente (400), nunca 5xx
-		assertThat(statusCode).isEqualTo(400);
+		// Assert: la validacion lo rechaza (INVALID_ARGUMENT), nunca un fallo interno
+		assertThat(observer.tieneError()).isTrue();
+		assertThat(observer.errorDeEstado().getStatus().getCode()).isEqualTo(Status.Code.INVALID_ARGUMENT);
 	}
 
 	@ParameterizedTest
@@ -93,19 +91,20 @@ class A03InjectionTest {
 			"\"<script>\"@example.com",
 			"'; DROP TABLE usuarios; --@x.com"
 	})
-	void registro_payloadDeInyeccionEnEmail_nuncaProvocaErrorDeServidor(String payload) throws Exception {
+	void registro_payloadDeInyeccionEnEmail_nuncaProvocaErrorDeServidor(String payload) {
 		// Arrange
-		String body = """
-				{"username":"injmail","email":%s,"password":"%s"}
-				""".formatted(toJson(payload), PASSWORD_VALIDA);
+		CapturingStreamObserver<RegistrarUsuarioResponse> observer = new CapturingStreamObserver<>();
 
 		// Act
-		int statusCode = mockMvc.perform(post("/api/v1/registro")
-						.contentType(MediaType.APPLICATION_JSON).content(body))
-				.andReturn().getResponse().getStatus();
+		controller.registrar(RegistrarUsuarioRequest.newBuilder()
+				.setUsername("injmail").setEmail(payload).setPassword(PASSWORD_VALIDA)
+				.build(), observer);
 
-		// Assert: la validacion lo rechaza o se guarda como literal, pero JAMAS es un 5xx
-		assertThat(statusCode).isLessThan(500);
+		// Assert: la validacion lo rechaza o se guarda como literal, pero JAMAS un fallo interno
+		if (observer.tieneError()) {
+			Status.Code codigo = observer.errorDeEstado().getStatus().getCode();
+			assertThat(codigo).isNotIn(Status.Code.INTERNAL, Status.Code.UNKNOWN);
+		}
 	}
 
 	@Test
@@ -123,26 +122,21 @@ class A03InjectionTest {
 	}
 
 	@Test
-	void trasIntentosDeInyeccion_laTablaSigueOperativa() throws Exception {
+	void trasIntentosDeInyeccion_laTablaSigueOperativa() {
 		// Arrange: lanzar un payload destructivo
-		mockMvc.perform(post("/api/v1/registro").contentType(MediaType.APPLICATION_JSON)
-				.content("""
-						{"username":"'; DROP TABLE usuarios; --","email":"x@x.com","password":"%s"}
-						""".formatted(PASSWORD_VALIDA)));
+		controller.registrar(RegistrarUsuarioRequest.newBuilder()
+				.setUsername("'; DROP TABLE usuarios; --").setEmail("x@x.com").setPassword(PASSWORD_VALIDA)
+				.build(), new CapturingStreamObserver<>());
 
 		// Act: un alta legitima posterior
-		mockMvc.perform(post("/api/v1/registro").contentType(MediaType.APPLICATION_JSON)
-						.content("""
-								{"username":"legitimo","email":"legitimo@example.com","password":"%s"}
-								""".formatted(PASSWORD_VALIDA)))
-				.andExpect(status().isCreated());
+		CapturingStreamObserver<RegistrarUsuarioResponse> observer = new CapturingStreamObserver<>();
+		controller.registrar(RegistrarUsuarioRequest.newBuilder()
+				.setUsername("legitimo").setEmail("legitimo@example.com").setPassword(PASSWORD_VALIDA)
+				.build(), observer);
 
 		// Assert: la tabla existe y solo tiene el registro valido
+		assertThat(observer.tieneError()).isFalse();
 		assertThat(repository.findByUsernameIgnoreCase("legitimo")).isPresent();
 		assertThat(repository.count()).isEqualTo(1);
-	}
-
-	private static String toJson(String raw) {
-		return "\"" + raw.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
 	}
 }

@@ -6,8 +6,8 @@ option java_multiple_files = true;
 option java_package = "com.arquetipo.demo.registro.grpc";
 option java_outer_classname = "RegistroProto";
 
-// Espejo por gRPC de POST /api/v1/registro (ver RegistroController/RegistroApi). Mismo
-// contrato y mismo flujo (RegistroService); solo cambia el protocolo de transporte.
+// Alta de usuarios de chat-registro (RegistroService). Unico protocolo que expone este
+// servicio para el registro; el REST del sistema lo sirve chat-gateway, que reenvia aqui.
 service RegistroGrpcService {
   rpc Registrar (RegistrarUsuarioRequest) returns (RegistrarUsuarioResponse);
 }

@@ -1,23 +1,23 @@
 # chat-registro — microservicio de registro de usuarios
 
 Servicio backend en **Spring Boot 4 / Java 25** con arquitectura MVC por capas.
-Expone el **flujo de registro** (`POST /api/v1/registro`) que persiste usuarios en la
-base de datos MySQL centralizada del sistema.
+Expone el **flujo de registro** por **gRPC** (`RegistroGrpcService/Registrar`, único
+protocolo del servicio) y persiste usuarios en la base de datos MySQL centralizada del
+sistema. El REST del sistema lo sirve **`chat-gateway`**, que reenvía aquí por gRPC.
 
 ## Stack
 
 | Área | Elección |
 |------|----------|
-| Framework | Spring Boot 4.1.1 (`spring-boot-starter-webmvc`) |
+| Framework | Spring Boot 4.1.1 |
 | Lenguaje | Java 25 (toolchain de Gradle) |
 | Build | Gradle (wrapper incluido) |
 | Persistencia | Spring Data JPA + Hibernate; MySQL (runtime), H2 en memoria (tests) |
 | Migraciones | Flyway (`spring-boot-starter-flyway` + `flyway-mysql`) |
 | Identidad | Firebase Auth (Admin SDK), tras el puerto `registro.identidad.ProveedorIdentidad`. El servicio no persiste contraseñas. |
-| Validación | Bean Validation (`spring-boot-starter-validation`) |
-| Errores | RFC 9457 *Problem Details* vía `@RestControllerAdvice` |
-| Docs API | springdoc-openapi + Swagger UI |
-| Observabilidad | Spring Boot Actuator |
+| Validación | Bean Validation (`spring-boot-starter-validation`), aplicada a mano en el controller gRPC |
+| Transporte | gRPC (`registro/grpc/`, servidor embebido, ver *Protocolo gRPC*) |
+| Observabilidad | Spring Boot Actuator (vía `spring-boot-starter-webmvc`, único uso que le queda al HTTP en este servicio) |
 | Utilidades | Lombok, DevTools |
 
 ## Base de datos
@@ -63,10 +63,10 @@ se sobreescriben por variables de entorno:
 | `DB_USERNAME` | `chat_registro_svc` | Usuario propio del servicio |
 | `DB_PASSWORD` | `chat_registro_pw` | Contraseña de ese usuario |
 | `JPA_DDL_AUTO` | `validate` | `validate` \| `none` \| `update` \| `create` \| `create-drop` |
-| `CORS_ALLOWED_ORIGINS` | `http://localhost:3000` | Orígenes permitidos para `/api/**`. Lista separada por comas, cada uno `esquema://host:puerto` sin barra final. Vacío = ninguna petición cross-origin aceptada. |
-| `CORS_ALLOW_CREDENTIALS` | `false` | Permitir cookies/credenciales cross-origin (incompatible con origen `*`). |
 | `FIREBASE_ENABLED` | `true` | `false` desactiva el SDK de Firebase por completo. **Sin un proveedor de identidad la app no arranca** (`RegistroService` lo necesita); solo tiene sentido en `false` si vas a sustituirlo por otro bean tú mismo. |
 | `FIREBASE_CREDENTIALS_PATH` | *(vacío)* | Ruta al JSON de la cuenta de servicio de Firebase. Vacío = credenciales por defecto del entorno (ADC / `GOOGLE_APPLICATION_CREDENTIALS`). |
+| `GRPC_SERVER_ENABLED` | `true` | `false` desactiva por completo el servidor gRPC (los tests lo hacen). |
+| `GRPC_SERVER_PORT` | `9090` | Puerto TCP del servidor gRPC, independiente del HTTP (`server.port`, solo usado hoy por Actuator). |
 
 Para desarrollo local hay un fichero **`.env`** (plantilla en [`.env.example`](.env.example),
 no se versiona):
@@ -84,19 +84,10 @@ necesitan MySQL.
 ## Flujo de registro
 
 Este servicio **llama a Firebase Auth**, no el cliente: recibe `username` + `email` +
-`password`, crea primero el usuario en Firebase (Admin SDK) y solo si eso funciona persiste
-el perfil de dominio. El UID y el proveedor los decide el servidor; no son campos de la
-petición. La contraseña en claro se reenvía a Firebase y **nunca se guarda** en este servicio.
-
-`POST /api/v1/registro`
-
-```json
-{
-  "username": "mateo",
-  "email": "mateo@example.com",
-  "password": "Passw0rd!23"
-}
-```
+`password` (por gRPC, ver *Protocolo gRPC*), crea primero el usuario en Firebase (Admin SDK)
+y solo si eso funciona persiste el perfil de dominio. El UID y el proveedor los decide el
+servidor; no son campos de la petición. La contraseña en claro se reenvía a Firebase y
+**nunca se guarda** en este servicio.
 
 - `username`: 3–50 caracteres, `[a-zA-Z0-9._-]`, único (sin distinguir mayúsculas).
 - `email`: formato válido, ≤255, único (se normaliza a minúsculas).
@@ -105,11 +96,12 @@ petición. La contraseña en claro se reenvía a Firebase y **nunca se guarda** 
   veces seguidas (`aaaa` no vale, `aaa` sí). Se valida aquí (para no reenviar al proveedor una
   contraseña que ya sabemos débil) y de nuevo la aplica Firebase al crear la cuenta.
 
-Respuestas: `201` con el usuario creado · `409` si los datos entran en conflicto con una
-cuenta existente (username, email, o el usuario ya existente en Firebase) · `400` con lista
-`errors` si la validación falla.
+Resultado: el usuario creado (`RegistrarUsuarioResponse`) · `ALREADY_EXISTS` si los datos
+entran en conflicto con una cuenta existente (username, email, o el usuario ya existente en
+Firebase) · `INVALID_ARGUMENT` si la validación falla. Detalle completo del contrato y del
+mapeo de errores en [`docs/contrato-grpc-registro.md`](docs/contrato-grpc-registro.md).
 
-Por seguridad, el `409` devuelve **siempre el mismo mensaje genérico** (`"No se pudo
+Por seguridad, el conflicto devuelve **siempre el mismo mensaje genérico** (`"No se pudo
 completar el registro con los datos proporcionados"`), sin revelar qué colisionó ni el valor
 enviado. El detalle concreto (incluido lo que reporte Firebase) queda solo en el log del
 servidor (`WARN`/`ERROR`), para no facilitar la enumeración de cuentas.
@@ -122,7 +114,7 @@ servidor (`WARN`/`ERROR`), para no facilitar la enumeración de cuentas.
 3. Si Firebase dice que el email **ya existe**: se busca ese usuario en Firebase y se
    **reconcilia** — si nuestra base no tiene fila para él (un alta anterior que falló a
    medias, por ejemplo), se crea ahora y el alta termina en éxito; si ya la tiene, es un
-   conflicto real (409 genérico).
+   conflicto real (`ALREADY_EXISTS` genérico).
 4. Si Firebase creó el usuario pero **el guardado en la base de datos falla**, se **revierte**
    (borra) el usuario recién creado en Firebase, para no dejarlo huérfano. En la rama de
    reconciliación nunca se borra: ese usuario ya existía en Firebase antes de esta petición.
@@ -135,20 +127,11 @@ la interfaz `ProveedorIdentidad` (`crearUsuario` / `eliminarUsuario` / `buscarPo
 identidad (o añadir uno nuevo) es escribir una implementación nueva en un subpaquete
 (`identidad/firebase/` hoy), sin tocar la lógica de negocio del registro.
 
-El contrato completo (esquemas, ejemplos y códigos de respuesta) está documentado con
-anotaciones OpenAPI en la interfaz `RegistroApi` (que implementa el controlador) y en los
-DTO, y se explora desde Swagger UI.
-
 ## Documentación de la API
 
-- **Contratos para clientes (REST)** → [`docs/contratos-api.md`](docs/contratos-api.md) (request/response,
-  errores, notas de integración para frontend, modelos TypeScript).
-- **Contrato gRPC (para otros servicios)** → [`docs/contrato-grpc-registro.md`](docs/contrato-grpc-registro.md).
-
-Con la aplicación levantada (`./gradlew bootRun`):
-
-- **Swagger UI** → <http://localhost:8080/swagger-ui.html>
-- **OpenAPI JSON** → <http://localhost:8080/v3/api-docs>
+**Contrato gRPC (para otros servicios, incluido `chat-gateway`)** →
+[`docs/contrato-grpc-registro.md`](docs/contrato-grpc-registro.md) (campos, mapeo de
+errores, ejemplo `grpcurl`/Java, cómo generar el stub del cliente).
 
 ## Estructura
 
@@ -157,13 +140,12 @@ com.arquetipo.demo
 ├── DemoApplication.java
 ├── common/                              infraestructura transversal
 │   ├── config/JpaAuditingConfig.java        auditoría (createdAt/updatedAt)
-│   ├── config/CorsProperties.java           binding de `app.cors.*` (CORS_ALLOWED_ORIGINS)
-│   ├── config/CorsConfig.java               habilita CORS para /api/**
 │   ├── env/DotenvEnvironmentPostProcessor.java  carga .env (Gradle, IDE o jar — ver META-INF/spring.factories)
-│   ├── exception/
-│   │   ├── ResourceNotFoundException        → 404
-│   │   └── DuplicateResourceException       → 409
-│   └── web/GlobalExceptionHandler.java      excepciones → Problem Details (RFC 9457)
+│   ├── exception/DuplicateResourceException  → ALREADY_EXISTS en el controller gRPC
+│   └── grpc/                                servidor gRPC embebido
+│       ├── GrpcServerProperties.java            binding de `grpc.server.*` (puerto, enabled)
+│       ├── GrpcServerConfig.java                registra el servidor si grpc.server.enabled=true
+│       └── GrpcServerLifecycle.java             arranca/detiene el servidor con el ciclo de vida de Spring
 └── registro/                            flujo de alta de usuarios
     ├── domain/Usuario.java                  entidad JPA (tabla `usuarios`)
     ├── domain/ProveedorAuth.java            entidad JPA de solo lectura (tabla `proveedores_auth`)
@@ -173,24 +155,16 @@ com.arquetipo.demo
     ├── identidad/                           puerto hacia el proveedor de identidad externo
     │   ├── ProveedorIdentidad.java              interfaz: crearUsuario / eliminarUsuario / buscarPorEmail / nombreProveedor
     │   ├── UsuarioExterno.java                  record (uid)
-    │   ├── ProveedorIdentidadException.java     fallo del proveedor → 500 generico
+    │   ├── ProveedorIdentidadException.java     fallo del proveedor → INTERNAL generico
     │   ├── UsuarioYaRegistradoException.java    dispara la reconciliacion en RegistroService
     │   └── firebase/
     │       ├── FirebaseAppConfig.java           inicializa el SDK (FirebaseApp/FirebaseAuth)
     │       └── FirebaseProveedorIdentidad.java  implementacion sobre Firebase Admin SDK
     ├── service/RegistroService.java         orquesta: unicidad local + proveedor + persistencia + compensacion
-    ├── web/
-    │   ├── RegistroController.java          POST /api/v1/registro (enrutado + delegación)
-    │   ├── RegistroApi.java                 contrato OpenAPI (anotaciones springdoc)
-    │   └── dto/RegistroRequest.java · RegistroResponse.java
-    └── grpc/                                mismo contrato/flujo que web/, por gRPC (ver más abajo)
-        ├── RegistroGrpcController.java          rpc Registrar (delega en RegistroService, sin duplicar reglas)
-        └── RegistroGrpcMapper.java              traduce entre los DTO REST y los mensajes de registro.proto
-
-common/grpc/
-├── GrpcServerProperties.java             binding de `grpc.server.*` (puerto, enabled)
-├── GrpcServerConfig.java                 registra el servidor si grpc.server.enabled=true
-└── GrpcServerLifecycle.java              arranca/detiene el servidor gRPC con el ciclo de vida de Spring
+    ├── web/dto/RegistroRequest.java · RegistroResponse.java   contrato compartido (validado y usado por grpc/)
+    └── grpc/                                unico protocolo expuesto (ver *Protocolo gRPC*)
+        ├── RegistroGrpcController.java          rpc Registrar (valida + delega en RegistroService)
+        └── RegistroGrpcMapper.java              traduce entre los DTO y los mensajes de registro.proto
 
 src/main/proto/registro.proto             contrato gRPC (servicio + mensajes), genera los stubs en build/generated
 
@@ -201,8 +175,9 @@ src/main/resources/db
     └── V2__usuarios_firebase_auth.sql        quita password_hash; añade firebase_uid + proveedores_auth
 ```
 
-Flujo de una petición: `Controller` → `Service` (transacciones + reglas) → `Repository` (JPA)
-→ `Entity`. El `Mapper` traduce entre `Entity` y los DTO; el cliente nunca ve la entidad.
+Flujo de una petición: `RegistroGrpcController` (valida) → `RegistroService` (transacciones +
+reglas) → `Repository` (JPA) → `Entity`. El `Mapper`/`RegistroGrpcMapper` traducen entre
+`Entity`/DTO y el mensaje proto; el cliente nunca ve la entidad.
 
 ## Arrancar
 
@@ -222,21 +197,17 @@ Flujo de una petición: `Controller` → `Service` (transacciones + reglas) → 
 > Con `FIREBASE_ENABLED=false` el contexto tampoco arranca (`RegistroService` no tiene con qué
 > construirse) — solo tiene sentido si aportas tú mismo un bean `ProveedorIdentidad` alternativo.
 
-| Recurso | URL |
+| Recurso | Dirección |
 |---------|-----|
-| Registro (REST) | `POST` http://localhost:8080/api/v1/registro |
 | Registro (gRPC) | `localhost:9090`, `RegistroGrpcService/Registrar` (ver *Protocolo gRPC*) |
-| Swagger UI | http://localhost:8080/swagger-ui.html |
-| OpenAPI JSON | http://localhost:8080/v3/api-docs |
-| Actuator health | http://localhost:8080/actuator/health |
+| Actuator health | http://localhost:8081/actuator/health |
 
 Tests: `./gradlew test` · Empaquetar: `./gradlew bootJar` · Docker: `docker build -t chat-registro .`
 
 ## Protocolo gRPC
 
-`registro/grpc/RegistroGrpcController` expone el **mismo contrato y el mismo flujo** que
-`RegistroController` (delega en el mismo `RegistroService`, no duplica reglas de negocio) por
-gRPC en vez de REST — el controller REST sigue existiendo tal cual, sin modificarse. El
+`registro/grpc/RegistroGrpcController` es el **único protocolo** que expone este servicio
+para el registro — el REST del sistema lo sirve `chat-gateway`, que reenvía aquí por gRPC. El
 contrato vive en [`src/main/proto/registro.proto`](src/main/proto/registro.proto):
 
 ```proto
@@ -256,16 +227,15 @@ service RegistroGrpcService {
     localhost:9090 com.arquetipo.demo.registro.grpc.RegistroGrpcService/Registrar
   ```
 - **Validación**: como gRPC no pasa por Spring MVC, `RegistroGrpcController` valida a mano el
-  mismo `RegistroRequest` con el mismo `Validator` de Bean Validation — mismas reglas (incluida
-  la política de contraseña) en los dos protocolos.
-- **Errores** (mismo principio de mensaje genérico al cliente / detalle real solo en el log que
-  `GlobalExceptionHandler`):
+  `RegistroRequest` con el mismo `Validator` de Bean Validation que usa el resto del flujo —
+  no hay una capa REST/OpenAPI aparte que repita las reglas.
+- **Errores** (mismo principio de mensaje genérico al cliente / detalle real solo en el log):
 
-  | Situación | REST | gRPC |
-  |---|---|---|
-  | Validación fallida | 400 | `INVALID_ARGUMENT` |
-  | Username/email duplicado, o ya existente en el proveedor | 409 (mensaje genérico) | `ALREADY_EXISTS` (mismo mensaje genérico) |
-  | Error inesperado | 500 (mensaje genérico) | `INTERNAL` (mismo mensaje genérico) |
+  | Situación | Código gRPC |
+  |---|---|
+  | Validación fallida | `INVALID_ARGUMENT` |
+  | Username/email duplicado, o ya existente en el proveedor | `ALREADY_EXISTS` (mensaje genérico) |
+  | Error inesperado | `INTERNAL` (mensaje genérico) |
 
 - Generación de stubs: plugin `com.google.protobuf` (`./gradlew generateProto`), se ejecuta
   automáticamente antes de compilar. **La cache de configuración de Gradle está desactivada**
@@ -277,33 +247,26 @@ service RegistroGrpcService {
 
 Patrón **AAA** (*Arrange – Act – Assert*) en toda la suite. Van todos en `./gradlew test`.
 
-- Unitarios y de slice: `RegistroServiceTest`, `RegistroControllerTest` (`@WebMvcTest`),
-  `UsuarioRepositoryTest` (`@DataJpaTest`, H2).
+- Unitarios: `RegistroServiceTest`, `UsuarioRepositoryTest` (`@DataJpaTest`, H2).
+- De protocolo: `RegistroGrpcControllerTest` (servidor gRPC in-process, sin red real).
 - Integración: `@SpringBootTest` sobre H2 en memoria (no requiere MySQL).
 - **Seguridad (OWASP Top 10)**: `src/test/java/com/arquetipo/demo/security/`, una clase por
-  categoría verificable desde código — ver [`docs/testing-seguridad-owasp.md`](docs/testing-seguridad-owasp.md).
+  categoría verificable desde código — la mayoría llama directamente a
+  `RegistroGrpcController` (con o sin contexto de Spring según lo que necesite cada una) en
+  vez de un canal de red — ver [`docs/testing-seguridad-owasp.md`](docs/testing-seguridad-owasp.md).
 
 ## Contrato de errores
 
-Todas las respuestas de error siguen RFC 9457:
+Sin REST en este servicio no hay *Problem Details*: los errores de gRPC llegan como
+`StatusRuntimeException` con un código y una `description` — ver la tabla de *Protocolo
+gRPC* de más arriba y el detalle completo (incluida la política de "mensaje genérico al
+cliente, detalle real en el log") en
+[`docs/contrato-grpc-registro.md`](docs/contrato-grpc-registro.md) §4.
 
-```json
-{
-  "type": "urn:problem-type:validation-error",
-  "title": "Datos invalidos",
-  "status": 400,
-  "detail": "El cuerpo de la peticion no supero la validacion",
-  "instance": "/api/v1/registro",
-  "timestamp": "2026-01-01T10:00:00Z",
-  "errors": [{ "field": "email", "message": "debe ser una dirección de correo electrónico con formato correcto" }]
-}
-```
-
-| Excepción | HTTP |
+| Excepción de dominio | Código gRPC |
 |-----------|------|
-| `ResourceNotFoundException` | 404 |
-| `DuplicateResourceException` | 409 |
-| Bean Validation (`@Valid`) | 400 con lista `errors` |
-| `DataIntegrityViolationException` | 409 |
-| `ProveedorIdentidadException` (fallo de Firebase que no es "ya existe") | 500 (mensaje genérico; el detalle real solo en logs) |
-| cualquier otra | 500 (mensaje genérico, traza solo en logs) |
+| `DuplicateResourceException` | `ALREADY_EXISTS` |
+| Bean Validation | `INVALID_ARGUMENT` |
+| `DataIntegrityViolationException` (traducida a `DuplicateResourceException` en `RegistroService`) | `ALREADY_EXISTS` |
+| `ProveedorIdentidadException` (fallo de Firebase que no es "ya existe") | `INTERNAL` (mensaje genérico; el detalle real solo en logs) |
+| cualquier otra | `INTERNAL` (mensaje genérico, traza solo en logs) |

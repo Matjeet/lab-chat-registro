@@ -4,89 +4,71 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.arquetipo.demo.registro.grpc.CapturingStreamObserver;
+import com.arquetipo.demo.registro.grpc.RegistrarUsuarioRequest;
+import com.arquetipo.demo.registro.grpc.RegistrarUsuarioResponse;
+import com.arquetipo.demo.registro.grpc.RegistroGrpcController;
 import com.arquetipo.demo.registro.service.RegistroService;
-import com.arquetipo.demo.registro.web.dto.RegistroResponse;
-import java.time.Instant;
+import io.grpc.Status;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.MediaType;
-import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 /**
  * OWASP A05:2021 - Security Misconfiguration.
  *
- * <p>Los errores no filtran detalles internos (mensaje de excepcion, stack trace), los
- * endpoints de Actuator sensibles no estan expuestos y CORS solo acepta los origenes de la
- * lista permitida.
+ * <p>Los errores no filtran detalles internos (mensaje de excepcion, stack trace) y los
+ * endpoints de Actuator sensibles no estan expuestos.
+ *
+ * <p>La parte de CORS que llevaba esta clase se retiro junto con {@code CorsConfig}: era
+ * infraestructura exclusiva del REST de este servicio, que ya no existe (gRPC no tiene el
+ * concepto de preflight/origen de navegador) — chat-gateway es ahora el unico punto de
+ * entrada REST del sistema y su propio CORS, si lo tiene, se documenta ahi.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
-@TestPropertySource(properties =
-		"app.cors.allowed-origins=https://frontend.permitido.example,http://localhost:3000")
 class A05SecurityMisconfigurationTest {
-
-	private static final String DETALLE_INTERNO = "host=db-prod-01.internal token=SECRET-abc123";
-	private static final String ORIGEN_PERMITIDO = "https://frontend.permitido.example";
-	private static final String ORIGEN_NO_PERMITIDO = "https://sitio-malicioso.example";
 
 	@Autowired
 	private MockMvc mockMvc;
+
+	@Autowired
+	private RegistroGrpcController controller;
 
 	@MockitoBean
 	private RegistroService registroService;
 
 	@Test
-	void errorNoControlado_noFiltraMensajeInternoNiStackTrace() throws Exception {
+	void errorNoControlado_noFiltraMensajeInternoNiStackTrace() {
 		// Arrange
-		when(registroService.registrar(any()))
-				.thenThrow(new IllegalStateException(DETALLE_INTERNO));
+		String detalleInterno = "host=db-prod-01.internal token=SECRET-abc123";
+		when(registroService.registrar(any())).thenThrow(new IllegalStateException(detalleInterno));
+		CapturingStreamObserver<RegistrarUsuarioResponse> observer = new CapturingStreamObserver<>();
 
 		// Act
-		String cuerpo = mockMvc.perform(post("/api/v1/registro")
-						.contentType(MediaType.APPLICATION_JSON)
-						.content("""
-								{"username":"quiebra","email":"quiebra@example.com","password":"Passw0rd!23"}
-								"""))
-				.andExpect(status().isInternalServerError())
-				.andExpect(jsonPath("$.trace").doesNotExist())
-				.andExpect(jsonPath("$.exception").doesNotExist())
-				.andExpect(jsonPath("$.detail").value("Ocurrio un error inesperado. Contacte con soporte."))
-				.andReturn().getResponse().getContentAsString();
+		controller.registrar(RegistrarUsuarioRequest.newBuilder()
+				.setUsername("quiebra").setEmail("quiebra@example.com").setPassword("Passw0rd!23")
+				.build(), observer);
 
 		// Assert
-		assertThat(cuerpo)
-				.doesNotContain(DETALLE_INTERNO)
+		assertThat(observer.tieneError()).isTrue();
+		Status status = observer.errorDeEstado().getStatus();
+		assertThat(status.getCode()).isEqualTo(Status.Code.INTERNAL);
+		assertThat(status.getDescription()).isEqualTo("Ocurrio un error inesperado. Contacte con soporte.");
+		assertThat(status.getDescription())
+				.doesNotContain(detalleInterno)
 				.doesNotContain("db-prod-01")
 				.doesNotContain("SECRET-abc123")
 				.doesNotContain("IllegalStateException")
 				.doesNotContainIgnoringCase("java.lang");
-	}
-
-	@Test
-	void errores_seSirvenComoProblemJson() throws Exception {
-		// Arrange
-		String cuerpoInvalido = """
-				{"username":"x","email":"no-email","password":"corta"}
-				""";
-
-		// Act + Assert
-		mockMvc.perform(post("/api/v1/registro").contentType(MediaType.APPLICATION_JSON).content(cuerpoInvalido))
-				.andExpect(status().isBadRequest())
-				.andExpect(result -> assertThat(result.getResponse().getContentType())
-						.startsWith("application/problem+json"));
 	}
 
 	@ParameterizedTest
@@ -124,77 +106,5 @@ class A05SecurityMisconfigurationTest {
 
 		// Assert
 		assertThat(cuerpo).doesNotContainIgnoringCase("exception");
-	}
-
-	// --- CORS -------------------------------------------------------------------
-
-	@Test
-	void cors_preflightDesdeOrigenPermitido_devuelveLasCabecerasCors() throws Exception {
-		// Act
-		var respuesta = mockMvc.perform(options("/api/v1/registro")
-				.header(HttpHeaders.ORIGIN, ORIGEN_PERMITIDO)
-				.header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "POST"));
-
-		// Assert
-		respuesta.andExpect(status().isOk())
-				.andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, ORIGEN_PERMITIDO))
-				.andExpect(header().stringValues(HttpHeaders.ACCESS_CONTROL_ALLOW_METHODS,
-						org.hamcrest.Matchers.hasItem(org.hamcrest.Matchers.containsString("POST"))));
-	}
-
-	@Test
-	void cors_preflightDesdeOrigenNoPermitido_seRechazaSinCabecerasCors() throws Exception {
-		// Act
-		var respuesta = mockMvc.perform(options("/api/v1/registro")
-				.header(HttpHeaders.ORIGIN, ORIGEN_NO_PERMITIDO)
-				.header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "POST"));
-
-		// Assert
-		respuesta.andExpect(status().isForbidden())
-				.andExpect(header().doesNotExist(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN));
-	}
-
-	@Test
-	void cors_peticionRealDesdeOrigenPermitido_llevaCabeceraAllowOrigin() throws Exception {
-		// Arrange
-		when(registroService.registrar(any()))
-				.thenReturn(new RegistroResponse(1L, "corsok", "corsok@example.com", "password", true, Instant.now()));
-
-		// Act + Assert
-		mockMvc.perform(post("/api/v1/registro")
-						.header(HttpHeaders.ORIGIN, ORIGEN_PERMITIDO)
-						.contentType(MediaType.APPLICATION_JSON)
-						.content("""
-								{"username":"corsok","email":"corsok@example.com","password":"Passw0rd!23"}
-								"""))
-				.andExpect(status().isCreated())
-				.andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, ORIGEN_PERMITIDO));
-	}
-
-	@Test
-	void cors_peticionRealDesdeOrigenNoPermitido_seRechazaSinCabeceraAllowOrigin() throws Exception {
-		// Act
-		var respuesta = mockMvc.perform(post("/api/v1/registro")
-				.header(HttpHeaders.ORIGIN, ORIGEN_NO_PERMITIDO)
-				.contentType(MediaType.APPLICATION_JSON)
-				.content("""
-						{"username":"corsbad","email":"corsbad@example.com","password":"Passw0rd!23"}
-						"""));
-
-		// Assert
-		respuesta.andExpect(status().isForbidden())
-				.andExpect(header().doesNotExist(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN));
-	}
-
-	@Test
-	void cors_porDefecto_noSePermitenCredenciales() throws Exception {
-		// Act
-		var respuesta = mockMvc.perform(options("/api/v1/registro")
-				.header(HttpHeaders.ORIGIN, ORIGEN_PERMITIDO)
-				.header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "POST"));
-
-		// Assert
-		respuesta.andExpect(status().isOk())
-				.andExpect(header().doesNotExist(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS));
 	}
 }
