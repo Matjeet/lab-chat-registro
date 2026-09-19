@@ -1,6 +1,6 @@
 # Contrato gRPC — Registro de usuarios (`chat-registro`)
 
-Referencia para que **otro servicio** consuma por gRPC el alta de usuarios de
+Referencia para que **otro servicio** consuma por gRPC el alta y la consulta de usuarios de
 **chat-registro**, sin necesidad de leer el código de este repositorio.
 
 Este es el **único protocolo** que expone chat-registro para el registro. El REST del
@@ -24,8 +24,8 @@ La fuente de verdad ejecutable es el propio `.proto`:
 | Variable de entorno del servidor | `GRPC_SERVER_PORT` (por defecto `9090`); `GRPC_SERVER_ENABLED=false` apaga el servidor por completo |
 | Paquete proto | `com.arquetipo.demo.registro.grpc` |
 | Servicio | `RegistroGrpcService` |
-| Método (rpc) | `Registrar(RegistrarUsuarioRequest) returns (RegistrarUsuarioResponse)` — unario, sin streaming |
-| Reflexión de servicio | Habilitada (`io.grpc:grpc-services`) — un cliente puede descubrir el contrato sin tener el `.proto`, ver §6 |
+| Métodos (rpc) | `Registrar(RegistrarUsuarioRequest) returns (RegistrarUsuarioResponse)` · `BuscarUsuarioPorUid(BuscarUsuarioPorUidRequest) returns (BuscarUsuarioPorUidResponse)` — ambos unarios, sin streaming |
+| Reflexión de servicio | Habilitada (`io.grpc:grpc-services`) — un cliente puede descubrir el contrato sin tener el `.proto`, ver §7 |
 | Autenticación | Ninguna — es el propio alta. Pensado para tráfico interno (p. ej. `chat-gateway`), no para exponerse directamente a internet. |
 
 > El puerto real por entorno lo define infraestructura; en producción probablemente vaya
@@ -50,6 +50,7 @@ option java_outer_classname = "RegistroProto";
 
 service RegistroGrpcService {
   rpc Registrar (RegistrarUsuarioRequest) returns (RegistrarUsuarioResponse);
+  rpc BuscarUsuarioPorUid (BuscarUsuarioPorUidRequest) returns (BuscarUsuarioPorUidResponse);
 }
 
 message RegistrarUsuarioRequest {
@@ -65,6 +66,15 @@ message RegistrarUsuarioResponse {
   string proveedor = 4;
   bool activo = 5;
   string created_at = 6;
+}
+
+message BuscarUsuarioPorUidRequest {
+  string uid = 1;
+}
+
+message BuscarUsuarioPorUidResponse {
+  string username = 1;
+  string email = 2;
 }
 ```
 
@@ -92,6 +102,21 @@ message RegistrarUsuarioResponse {
 | `created_at` | `string` | Instante de creación en UTC, **ISO-8601** (ej. `"2026-09-08T20:53:47.441193Z"`). Se manda como `string`, no como `google.protobuf.Timestamp`, para no forzar esa dependencia en el cliente. |
 
 > El UID del proveedor de identidad **no** se devuelve — el cliente no lo necesita.
+
+### `BuscarUsuarioPorUidRequest` / `BuscarUsuarioPorUidResponse`
+
+Resuelve a qué cuenta corresponde una sesión ya autenticada en Firebase, a partir de su UID
+— pensado para `chat-gateway`, que valida el `idToken` del cliente (ahí obtiene el uid) y
+necesita el `username`/`email` de dominio, que Firebase no conoce.
+
+| Campo | Mensaje | Tipo proto | Obligatorio | Descripción |
+|---|---|---|---|---|
+| `uid` | `BuscarUsuarioPorUidRequest` | `string` | sí | UID que Firebase Authentication le asignó al usuario al crear la cuenta. Identificador opaco, no un secreto. Vacío → `INVALID_ARGUMENT`. |
+| `username` | `BuscarUsuarioPorUidResponse` | `string` | — | El `username` con el que se registró. |
+| `email` | `BuscarUsuarioPorUidResponse` | `string` | — | El `email` (normalizado a minúsculas) con el que se registró. |
+
+> No expone nada más del perfil (ni `id`, ni `proveedor`, ni `createdAt`) — si en el futuro
+> hace falta más, se amplía este mensaje, no se reutiliza `RegistrarUsuarioResponse`.
 
 ---
 
@@ -140,23 +165,45 @@ try {
 }
 ```
 
+### `BuscarUsuarioPorUid`
+
+```bash
+grpcurl -plaintext -d '{"uid": "0lSUQS1RdYauzu3ifx6izoyzkvt2"}' \
+  localhost:9090 com.arquetipo.demo.registro.grpc.RegistroGrpcService/BuscarUsuarioPorUid
+```
+
+Respuesta:
+
+```json
+{
+  "username": "mateo",
+  "email": "mateo@example.com"
+}
+```
+
+```java
+BuscarUsuarioPorUidResponse respuesta = stub.buscarUsuarioPorUid(
+        BuscarUsuarioPorUidRequest.newBuilder().setUid(uid).build());
+```
+
 ---
 
 ## 4. Errores
 
 gRPC no tiene *Problem Details*: los errores llegan como `StatusRuntimeException` con un
-`Status.Code` y una `description` de texto libre. **Mensaje genérico al cliente, detalle real
-solo en el log del servidor** — la ausencia de un código HTTP no significa menos disciplina
-aquí, es la misma politica de seguridad expresada con códigos gRPC.
+`Status.Code` y una `description` de texto libre.
+
+### `Registrar`
+
+**Mensaje genérico al cliente, detalle real solo en el log del servidor** — la ausencia de
+un código HTTP no significa menos disciplina aquí, es la misma politica de seguridad
+expresada con códigos gRPC.
 
 | Situación | Código gRPC | `description` |
 |---|---|---|
 | El cuerpo no supera Bean Validation | `INVALID_ARGUMENT` | `"El cuerpo de la peticion no supero la validacion -> <campo>: <mensaje>; ..."` (un `campo: mensaje` por cada violación) |
 | `username`/`email` duplicado, o el usuario ya existe en el proveedor de identidad | `ALREADY_EXISTS` | Mensaje genérico fijo: `"No se pudo completar el registro con los datos proporcionados"` — **nunca** indica qué campo colisionó |
 | Cualquier otro fallo (proveedor de identidad, base de datos, bug interno) | `INTERNAL` | Mensaje genérico fijo: `"Ocurrio un error inesperado. Contacte con soporte."` |
-
-Si accedes al registro a través de `chat-gateway` (REST), es su propia documentación la que
-dice cómo traduce estos códigos a HTTP — no lo asumas desde aquí.
 
 Notas:
 
@@ -167,22 +214,87 @@ Notas:
 - **El `ALREADY_EXISTS` es deliberadamente genérico**, por la misma razón que el `409` REST:
   evitar que alguien enumere cuentas probando emails/usernames. No reintentes asumiendo que es
   transitorio.
-- **Un fallo de conexión** (servidor caído, puerto equivocado) llega como `UNAVAILABLE`, no
-  está en la tabla porque no lo genera este servicio — es infraestructura de gRPC.
+
+### `BuscarUsuarioPorUid`
+
+Aquí **no** aplica el mensaje genérico: no es un alta con riesgo de enumeración de cuentas
+por username/email — es una consulta puntual por un UID opaco (28 caracteres, no
+correlativo) que quien pregunta ya posee de antemano (lo sacó del `idToken` que él mismo
+validó). El `NOT_FOUND` puede describir la situación tal cual.
+
+| Situación | Código gRPC | `description` |
+|---|---|---|
+| `uid` vacío | `INVALID_ARGUMENT` | `"uid es obligatorio"` |
+| Ningún usuario con ese `uid` | `NOT_FOUND` | `"Usuario no encontrado"` |
+| Cualquier otro fallo (base de datos, bug interno) | `INTERNAL` | Mensaje genérico fijo: `"Ocurrio un error inesperado. Contacte con soporte."` |
+
+Si accedes a cualquiera de los dos rpc a través de `chat-gateway` (REST), es su propia
+documentación la que dice cómo traduce estos códigos a HTTP — no lo asumas desde aquí (ver
+§6 para una propuesta de ese mapeo).
+
+**Un fallo de conexión** (servidor caído, puerto equivocado) llega como `UNAVAILABLE` en
+cualquiera de los dos rpc — no está en las tablas porque no lo genera este servicio, es
+infraestructura de gRPC.
 
 ---
 
 ## 5. Cómo funciona por dentro
 
 `RegistroGrpcController` (`com.arquetipo.demo.registro.grpc`) no reimplementa ninguna regla:
-traduce el mensaje proto a `RegistroRequest` y delega en `RegistroService`, que es quien
-orquesta todo (alta en el proveedor de identidad, reconciliación si ya existía, compensación
-si el guardado local falla) — ver `README.md` §*Orquestación y compensación* para el detalle
-completo.
+
+- `Registrar` traduce el mensaje proto a `RegistroRequest` y delega en `RegistroService`, que
+  es quien orquesta todo (alta en el proveedor de identidad, reconciliación si ya existía,
+  compensación si el guardado local falla) — ver `README.md` §*Orquestación y compensación*
+  para el detalle completo.
+- `BuscarUsuarioPorUid` delega en `RegistroService.buscarPorFirebaseUid(uid)`, que hace una
+  única consulta de solo lectura (`UsuarioRepository.findByFirebaseUid`) — no hay
+  orquestación ni compensación que explicar aquí, es una lectura directa.
 
 ---
 
-## 6. Generar el stub del cliente
+## 6. Sugerencia de contrato REST (para `chat-gateway`)
+
+`chat-registro` no expone REST — esto es lo que se propone para que `chat-gateway` lo
+implemente como fachada REST de `BuscarUsuarioPorUid`, siguiendo el mismo criterio que ya
+usa para `POST /api/v1/registro` (ver la documentación propia de `chat-gateway`).
+
+| | |
+|---|---|
+| Método | `GET` |
+| Path | `/api/v1/usuarios/{uid}` |
+| Path param | `uid` — el UID de Firebase del usuario a resolver |
+| Autenticación | El gateway debería exigir el `idToken` de Firebase del cliente (p. ej. `Authorization: Bearer <idToken>`) y, como mínimo, verificar que el `uid` pedido coincide con el del token — si no, este endpoint se convierte en una forma de enumerar cuentas por fuerza bruta de UIDs. Esto es responsabilidad del gateway: `chat-registro` no valida tokens de Firebase, solo consulta por uid. |
+
+Respuesta `200 OK`:
+
+```json
+{
+  "username": "mateo",
+  "email": "mateo@example.com"
+}
+```
+
+| Código HTTP | Cuándo | Origen (gRPC) |
+|---|---|---|
+| `200` | Usuario encontrado | `OK` |
+| `400` | `uid` vacío o con formato inválido | `INVALID_ARGUMENT` |
+| `404` | Ningún usuario con ese `uid` | `NOT_FOUND` |
+| `500` | Fallo inesperado de `chat-registro` | `INTERNAL` |
+| `503` | `chat-registro` no responde | `UNAVAILABLE` (u otro error de canal gRPC) |
+
+Ejemplo:
+
+```bash
+curl -H "Authorization: Bearer <idToken>" http://localhost:8080/api/v1/usuarios/0lSUQS1RdYauzu3ifx6izoyzkvt2
+```
+
+Esto es una **propuesta**, no un contrato ya implementado — quien lo construya en
+`chat-gateway` decide el formato final de error (Problem Details, como en el registro, es lo
+consistente con el resto del gateway) y si añade más campos a la respuesta más adelante.
+
+---
+
+## 7. Generar el stub del cliente
 
 Si tu proyecto usa Gradle con el plugin `com.google.protobuf` (igual que este repo), copia
 `registro.proto` a tu `src/main/proto/` y añade las dependencias `io.grpc:grpc-stub` +
@@ -198,9 +310,10 @@ pueden listar servicios y construir la petición sin el archivo, apuntando solo 
 
 ---
 
-## 7. Control de versiones de este documento
+## 8. Control de versiones de este documento
 
 | Fecha | Cambio |
 |---|---|
+| 2026-09-19 | Se añade `BuscarUsuarioPorUid` (username/email a partir del uid de Firebase) y la propuesta de contrato REST §6 para que `chat-gateway` lo exponga. |
 | 2026-09-18 | Se retira el REST de este servicio (`RegistroController`/`RegistroApi`, CORS, Swagger): gRPC pasa a ser el único protocolo. `chat-gateway` es ahora el único punto de entrada REST del sistema y reenvía aquí. Se actualizan las referencias a `contratos-api.md` (eliminado). |
 | 2026-09-13 | Versión inicial: contrato gRPC de `RegistroGrpcService/Registrar`, espejo de `POST /api/v1/registro`. |

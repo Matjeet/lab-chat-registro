@@ -2,6 +2,7 @@ package com.arquetipo.demo.registro.grpc;
 
 import com.arquetipo.demo.registro.web.dto.RegistroRequest;
 import com.arquetipo.demo.registro.web.dto.RegistroResponse;
+import com.arquetipo.demo.registro.web.dto.UsuarioBasico;
 import org.springframework.stereotype.Component;
 
 /**
@@ -29,6 +30,13 @@ public class RegistroGrpcMapper {
 				.setProveedor(response.proveedor())
 				.setActivo(response.activo())
 				.setCreatedAt(response.createdAt().toString())
+				.build();
+	}
+
+	BuscarUsuarioPorUidResponse aGrpcResponse(UsuarioBasico usuario) {
+		return BuscarUsuarioPorUidResponse.newBuilder()
+				.setUsername(usuario.username())
+				.setEmail(usuario.email())
 				.build();
 	}
 }

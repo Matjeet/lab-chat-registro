@@ -6,8 +6,10 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.arquetipo.demo.common.exception.DuplicateResourceException;
+import com.arquetipo.demo.common.exception.UsuarioNoEncontradoException;
 import com.arquetipo.demo.registro.service.RegistroService;
 import com.arquetipo.demo.registro.web.dto.RegistroResponse;
+import com.arquetipo.demo.registro.web.dto.UsuarioBasico;
 import io.grpc.ManagedChannel;
 import io.grpc.Server;
 import io.grpc.StatusRuntimeException;
@@ -22,9 +24,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * Prueba el endpoint gRPC de registro sobre un servidor in-process (sin red real), mirando el
- * mismo contrato que {@code RegistroControllerTest} (el equivalente REST): mismo exito, mismo
- * 400/409 (aqui INVALID_ARGUMENT/ALREADY_EXISTS) con mensaje generico.
+ * Prueba los dos rpc de {@link RegistroGrpcController} sobre un servidor in-process (sin red
+ * real): {@code Registrar} (exito, validacion invalida, usuario duplicado) y
+ * {@code BuscarUsuarioPorUid} (encontrado, no encontrado, uid vacio).
  */
 class RegistroGrpcControllerTest {
 
@@ -102,6 +104,38 @@ class RegistroGrpcControllerTest {
 		assertThat(excepcion.getStatus().getDescription())
 				.isEqualTo("No se pudo completar el registro con los datos proporcionados")
 				.doesNotContain("mateo");
+	}
+
+	@Test
+	void buscarUsuarioPorUid_usuarioExiste_devuelveUsernameYEmail() {
+		when(registroService.buscarPorFirebaseUid("uid-existente"))
+				.thenReturn(new UsuarioBasico("mateo", "mateo@example.com"));
+
+		BuscarUsuarioPorUidResponse respuesta = stub.buscarUsuarioPorUid(
+				BuscarUsuarioPorUidRequest.newBuilder().setUid("uid-existente").build());
+
+		assertThat(respuesta.getUsername()).isEqualTo("mateo");
+		assertThat(respuesta.getEmail()).isEqualTo("mateo@example.com");
+	}
+
+	@Test
+	void buscarUsuarioPorUid_sinUsuarioConEseUid_devuelveNotFound() {
+		when(registroService.buscarPorFirebaseUid("uid-inexistente"))
+				.thenThrow(new UsuarioNoEncontradoException("Usuario no encontrado"));
+
+		StatusRuntimeException excepcion = catchStatusRuntimeException(() -> stub.buscarUsuarioPorUid(
+				BuscarUsuarioPorUidRequest.newBuilder().setUid("uid-inexistente").build()));
+
+		assertThat(excepcion.getStatus().getCode()).isEqualTo(io.grpc.Status.Code.NOT_FOUND);
+	}
+
+	@Test
+	void buscarUsuarioPorUid_uidVacio_devuelveInvalidArgumentSinLlamarAlServicio() {
+		StatusRuntimeException excepcion = catchStatusRuntimeException(() -> stub.buscarUsuarioPorUid(
+				BuscarUsuarioPorUidRequest.newBuilder().setUid("").build()));
+
+		assertThat(excepcion.getStatus().getCode()).isEqualTo(io.grpc.Status.Code.INVALID_ARGUMENT);
+		org.mockito.Mockito.verify(registroService, org.mockito.Mockito.never()).buscarPorFirebaseUid(any());
 	}
 
 	private static StatusRuntimeException catchStatusRuntimeException(Runnable llamada) {

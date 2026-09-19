@@ -1,9 +1,11 @@
 package com.arquetipo.demo.registro.grpc;
 
 import com.arquetipo.demo.common.exception.DuplicateResourceException;
+import com.arquetipo.demo.common.exception.UsuarioNoEncontradoException;
 import com.arquetipo.demo.registro.service.RegistroService;
 import com.arquetipo.demo.registro.web.dto.RegistroRequest;
 import com.arquetipo.demo.registro.web.dto.RegistroResponse;
+import com.arquetipo.demo.registro.web.dto.UsuarioBasico;
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
 import io.grpc.stub.StreamObserver;
@@ -15,12 +17,12 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 /**
- * Punto de entrada del alta de usuarios: recibe {@code username}/{@code email}/{@code
- * password}, delega en {@link RegistroService} (unica logica de negocio, sin duplicarla aqui)
- * y devuelve el mismo DTO de siempre traducido a {@code RegistrarUsuarioResponse}. Es el unico
- * protocolo que expone este servicio para el registro — el REST del sistema lo sirve
- * {@code chat-gateway}, que reenvia aqui por gRPC (ver
- * {@code docs/contrato-grpc-registro.md}).
+ * Punto de entrada del registro y consulta de usuarios: {@code registrar} recibe {@code
+ * username}/{@code email}/{@code password} y {@code buscarUsuarioPorUid} resuelve
+ * username/email a partir del UID de Firebase de una sesion ya autenticada. En los dos casos
+ * delega en {@link RegistroService} (unica logica de negocio, sin duplicarla aqui). Es el
+ * unico protocolo que expone este servicio — el REST del sistema lo sirve {@code
+ * chat-gateway}, que reenvia aqui por gRPC (ver {@code docs/contrato-grpc-registro.md}).
  *
  * <p>Al no pasar por Spring MVC no hay {@code @Valid} automatico: la validacion de Bean
  * Validation se aplica aqui a mano con el mismo {@link Validator} sobre el mismo
@@ -28,8 +30,8 @@ import org.springframework.stereotype.Component;
  * politica de contrasena) son la unica fuente de verdad, sin una capa REST/OpenAPI aparte que
  * las repita.
  *
- * <p>Mapeo de errores (mismo principio de "mensaje generico al cliente, detalle real solo en
- * el log" que se aplicaba antes en el REST):
+ * <p>Mapeo de errores de {@code registrar} (mismo principio de "mensaje generico al cliente,
+ * detalle real solo en el log" que se aplicaba antes en el REST):
  * <ul>
  *   <li>Violacion de Bean Validation -&gt; {@code INVALID_ARGUMENT}.</li>
  *   <li>{@link DuplicateResourceException} (username/email duplicado, o el usuario ya existente
@@ -39,6 +41,12 @@ import org.springframework.stereotype.Component;
  *   <li>Cualquier otra excepcion -&gt; {@code INTERNAL} con un mensaje generico; la excepcion
  *       real se registra aqui, nunca se envia al cliente.</li>
  * </ul>
+ *
+ * <p>{@code buscarUsuarioPorUid}: {@code uid} vacio -&gt; {@code INVALID_ARGUMENT}; sin
+ * usuario con ese uid -&gt; {@code NOT_FOUND}; cualquier otra excepcion -&gt; {@code INTERNAL}
+ * (mismo criterio de log que arriba). Aqui el mensaje de {@code NOT_FOUND} no necesita ser
+ * generico: no es un alta con riesgo de enumeracion de cuentas por username/email, es una
+ * consulta puntual por un UID opaco que ya posee quien pregunta.
  */
 @Slf4j
 @Component
@@ -81,6 +89,33 @@ public class RegistroGrpcController extends RegistroGrpcServiceGrpc.RegistroGrpc
 		} catch (Exception ex) {
 			log.error("Excepcion no controlada en el endpoint gRPC de registro", ex);
 			log.debug("<< registrar() -> INTERNAL");
+			responseObserver.onError(Status.INTERNAL.withDescription(DETALLE_ERROR_INTERNO).asRuntimeException());
+		}
+	}
+
+	@Override
+	public void buscarUsuarioPorUid(BuscarUsuarioPorUidRequest grpcRequest,
+			StreamObserver<BuscarUsuarioPorUidResponse> responseObserver) {
+		log.debug(">> buscarUsuarioPorUid(uid='{}')", grpcRequest.getUid());
+
+		if (grpcRequest.getUid().isBlank()) {
+			log.debug("<< buscarUsuarioPorUid() -> INVALID_ARGUMENT (uid vacio)");
+			responseObserver.onError(
+					Status.INVALID_ARGUMENT.withDescription("uid es obligatorio").asRuntimeException());
+			return;
+		}
+
+		try {
+			UsuarioBasico usuario = service.buscarPorFirebaseUid(grpcRequest.getUid());
+			responseObserver.onNext(mapper.aGrpcResponse(usuario));
+			responseObserver.onCompleted();
+			log.debug("<< buscarUsuarioPorUid() -> OK");
+		} catch (UsuarioNoEncontradoException ex) {
+			log.debug("<< buscarUsuarioPorUid() -> NOT_FOUND");
+			responseObserver.onError(Status.NOT_FOUND.withDescription(ex.getMessage()).asRuntimeException());
+		} catch (Exception ex) {
+			log.error("Excepcion no controlada al buscar el usuario por uid", ex);
+			log.debug("<< buscarUsuarioPorUid() -> INTERNAL");
 			responseObserver.onError(Status.INTERNAL.withDescription(DETALLE_ERROR_INTERNO).asRuntimeException());
 		}
 	}

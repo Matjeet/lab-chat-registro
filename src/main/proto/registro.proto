@@ -6,10 +6,15 @@ option java_multiple_files = true;
 option java_package = "com.arquetipo.demo.registro.grpc";
 option java_outer_classname = "RegistroProto";
 
-// Alta de usuarios de chat-registro (RegistroService). Unico protocolo que expone este
-// servicio para el registro; el REST del sistema lo sirve chat-gateway, que reenvia aqui.
+// Alta y consulta de usuarios de chat-registro (RegistroService). Unico protocolo que
+// expone este servicio; el REST del sistema lo sirve chat-gateway, que reenvia aqui.
 service RegistroGrpcService {
   rpc Registrar (RegistrarUsuarioRequest) returns (RegistrarUsuarioResponse);
+
+  // Resuelve username/email a partir del uid de Firebase de una sesion ya autenticada (p. ej.
+  // el gateway, tras validar el idToken del cliente, necesita saber a que cuenta corresponde).
+  // NOT_FOUND si el uid no corresponde a ningun usuario registrado.
+  rpc BuscarUsuarioPorUid (BuscarUsuarioPorUidRequest) returns (BuscarUsuarioPorUidResponse);
 }
 
 // Mismos campos y las mismas reglas que RegistroRequest (web/dto/RegistroRequest.java):
@@ -33,4 +38,16 @@ message RegistrarUsuarioResponse {
   // Instant en formato ISO-8601 (mismo formato que la serializacion JSON de Instant en la
   // respuesta REST), p. ej. "2026-09-08T20:53:47.441193Z".
   string created_at = 6;
+}
+
+message BuscarUsuarioPorUidRequest {
+  // UID que asigna Firebase Authentication al crear la cuenta (el mismo que devuelve
+  // RegistrarUsuarioResponse indirectamente via el registro; aqui lo aporta el cliente que
+  // ya se autentico contra Firebase). Identificador opaco, no un secreto, pero obligatorio.
+  string uid = 1;
+}
+
+message BuscarUsuarioPorUidResponse {
+  string username = 1;
+  string email = 2;
 }

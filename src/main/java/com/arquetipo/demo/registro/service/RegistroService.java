@@ -1,6 +1,7 @@
 package com.arquetipo.demo.registro.service;
 
 import com.arquetipo.demo.common.exception.DuplicateResourceException;
+import com.arquetipo.demo.common.exception.UsuarioNoEncontradoException;
 import com.arquetipo.demo.registro.domain.ProveedorAuth;
 import com.arquetipo.demo.registro.domain.Usuario;
 import com.arquetipo.demo.registro.identidad.ProveedorIdentidad;
@@ -12,6 +13,7 @@ import com.arquetipo.demo.registro.repository.ProveedorAuthRepository;
 import com.arquetipo.demo.registro.repository.UsuarioRepository;
 import com.arquetipo.demo.registro.web.dto.RegistroRequest;
 import com.arquetipo.demo.registro.web.dto.RegistroResponse;
+import com.arquetipo.demo.registro.web.dto.UsuarioBasico;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -19,9 +21,11 @@ import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Orquesta el alta de usuarios: crea la identidad en el proveedor externo (Firebase Auth,
- * via {@link ProveedorIdentidad}) y persiste el perfil de dominio.
+ * via {@link ProveedorIdentidad}) y persiste el perfil de dominio. Tambien resuelve la
+ * consulta inversa: dado un UID de Firebase, a que username/email corresponde
+ * ({@link #buscarPorFirebaseUid(String)}).
  *
- * <p>Orden de las operaciones y compensaciones:
+ * <p>Orden de las operaciones y compensaciones del alta:
  * <ol>
  *   <li>Comprobaciones locales de unicidad (username, email) — evitan llamar al proveedor
  *       cuando ya sabemos que el alta no puede completarse.</li>
@@ -97,6 +101,24 @@ public class RegistroService {
 			// del fallo cuando se lee el log de arriba hacia abajo.
 			throw ex;
 		}
+	}
+
+	/**
+	 * Resuelve username/email a partir del UID que Firebase le asigno al usuario. Pensado para
+	 * que otro servicio (via gRPC, normalmente {@code chat-gateway} tras validar el idToken del
+	 * cliente) sepa a que cuenta corresponde una sesion ya autenticada.
+	 */
+	@Transactional(readOnly = true)
+	public UsuarioBasico buscarPorFirebaseUid(String uid) {
+		log.debug(">> buscarPorFirebaseUid(uid='{}')", uid);
+		UsuarioBasico resultado = repository.findByFirebaseUid(uid)
+				.map(mapper::toUsuarioBasico)
+				.orElseThrow(() -> {
+					log.warn("No se encontro ningun usuario con ese uid de Firebase. uid='{}'", uid);
+					return new UsuarioNoEncontradoException("Usuario no encontrado");
+				});
+		log.debug("<< buscarPorFirebaseUid() -> OK, username='{}'", resultado.username());
+		return resultado;
 	}
 
 	/**
