@@ -4,23 +4,23 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.arquetipo.demo.registro.domain.ProveedorAuth;
+import com.arquetipo.demo.registro.grpc.CapturingStreamObserver;
+import com.arquetipo.demo.registro.grpc.RegistrarUsuarioRequest;
+import com.arquetipo.demo.registro.grpc.RegistrarUsuarioResponse;
+import com.arquetipo.demo.registro.grpc.RegistroGrpcController;
 import com.arquetipo.demo.registro.identidad.ProveedorIdentidad;
 import com.arquetipo.demo.registro.identidad.UsuarioExterno;
 import com.arquetipo.demo.registro.identidad.UsuarioYaRegistradoException;
 import com.arquetipo.demo.registro.repository.ProveedorAuthRepository;
+import io.grpc.Status;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
-import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
-import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -31,14 +31,13 @@ import org.springframework.transaction.annotation.Transactional;
  * que colisiono ni el valor enviado.
  */
 @SpringBootTest
-@AutoConfigureMockMvc
 @Transactional
 class A04AccountEnumerationTest {
 
 	private static final String PASSWORD_VALIDA = "Passw0rd!23";
 
 	@Autowired
-	private MockMvc mockMvc;
+	private RegistroGrpcController controller;
 
 	@Autowired
 	private ProveedorAuthRepository proveedorAuthRepository;
@@ -47,7 +46,7 @@ class A04AccountEnumerationTest {
 	private ProveedorIdentidad proveedorIdentidad;
 
 	@BeforeEach
-	void seedProveedorYAltaPrevia() throws Exception {
+	void seedProveedorYAltaPrevia() {
 		if (proveedorAuthRepository.findByNombreIgnoreCase("password").isEmpty()) {
 			ProveedorAuth proveedor = new ProveedorAuth();
 			proveedor.setNombre("password");
@@ -57,22 +56,20 @@ class A04AccountEnumerationTest {
 		when(proveedorIdentidad.crearUsuario(anyString(), anyString()))
 				.thenAnswer(inv -> new UsuarioExterno("fb-" + inv.getArgument(0)));
 
-		mockMvc.perform(post("/api/v1/registro").contentType(MediaType.APPLICATION_JSON)
-						.content("""
-								{"username":"existente","email":"existente@example.com","password":"%s"}
-								""".formatted(PASSWORD_VALIDA)))
-				.andExpect(status().isCreated());
+		CapturingStreamObserver<RegistrarUsuarioResponse> observer = new CapturingStreamObserver<>();
+		controller.registrar(RegistrarUsuarioRequest.newBuilder()
+				.setUsername("existente").setEmail("existente@example.com").setPassword(PASSWORD_VALIDA)
+				.build(), observer);
+		assertThat(observer.tieneError()).isFalse();
 	}
 
 	@Test
-	void conflictoDeUsernameDeEmailYDeProveedorExterno_producenLaMismaRespuesta() throws Exception {
+	void conflictoDeUsernameDeEmailYDeProveedorExterno_producenLaMismaRespuesta() {
 		// Arrange: colisiones por username y por email (locales)
-		String colisionUsername = """
-				{"username":"existente","email":"otro@example.com","password":"%s"}
-				""".formatted(PASSWORD_VALIDA);
-		String colisionEmail = """
-				{"username":"otro1","email":"existente@example.com","password":"%s"}
-				""".formatted(PASSWORD_VALIDA);
+		RegistrarUsuarioRequest colisionUsername = RegistrarUsuarioRequest.newBuilder()
+				.setUsername("existente").setEmail("otro@example.com").setPassword(PASSWORD_VALIDA).build();
+		RegistrarUsuarioRequest colisionEmail = RegistrarUsuarioRequest.newBuilder()
+				.setUsername("otro1").setEmail("existente@example.com").setPassword(PASSWORD_VALIDA).build();
 
 		// El proveedor externo tambien dice "ya existe" para un tercer email, y esa cuenta
 		// coincide con la que ya tenemos en la base local (reconciliacion -> conflicto real)
@@ -80,47 +77,44 @@ class A04AccountEnumerationTest {
 				.thenThrow(new UsuarioYaRegistradoException("ya existe en el proveedor", null));
 		when(proveedorIdentidad.buscarPorEmail("otroproveedor@example.com"))
 				.thenReturn(Optional.of(new UsuarioExterno("fb-existente@example.com")));
-		String colisionEnProveedor = """
-				{"username":"otro2","email":"otroproveedor@example.com","password":"%s"}
-				""".formatted(PASSWORD_VALIDA);
+		RegistrarUsuarioRequest colisionEnProveedor = RegistrarUsuarioRequest.newBuilder()
+				.setUsername("otro2").setEmail("otroproveedor@example.com").setPassword(PASSWORD_VALIDA).build();
 
 		// Act
-		String cuerpoPorUsername = ejecutarConflicto(colisionUsername);
-		String cuerpoPorEmail = ejecutarConflicto(colisionEmail);
-		String cuerpoPorProveedor = ejecutarConflicto(colisionEnProveedor);
+		Status statusPorUsername = ejecutarConflicto(colisionUsername);
+		Status statusPorEmail = ejecutarConflicto(colisionEmail);
+		Status statusPorProveedor = ejecutarConflicto(colisionEnProveedor);
 
-		// Assert: los tres cuerpos son identicos salvo el timestamp
-		assertThat(sinTimestamp(cuerpoPorUsername)).isEqualTo(sinTimestamp(cuerpoPorEmail));
-		assertThat(sinTimestamp(cuerpoPorEmail)).isEqualTo(sinTimestamp(cuerpoPorProveedor));
+		// Assert: los tres son indistinguibles (mismo codigo, misma descripcion)
+		assertThat(statusPorUsername.getCode()).isEqualTo(Status.Code.ALREADY_EXISTS);
+		assertThat(statusPorUsername.getDescription()).isEqualTo(statusPorEmail.getDescription());
+		assertThat(statusPorEmail.getDescription()).isEqualTo(statusPorProveedor.getDescription());
 	}
 
 	@Test
-	void respuestaDeConflicto_noRevelaCampoNiValorEnviado() throws Exception {
+	void respuestaDeConflicto_noRevelaCampoNiValorEnviado() {
 		// Arrange
-		String colisionUsername = """
-				{"username":"existente","email":"secreto-tecleado@example.com","password":"%s"}
-				""".formatted(PASSWORD_VALIDA);
+		RegistrarUsuarioRequest colisionUsername = RegistrarUsuarioRequest.newBuilder()
+				.setUsername("existente").setEmail("secreto-tecleado@example.com").setPassword(PASSWORD_VALIDA)
+				.build();
 
 		// Act
-		String cuerpo = ejecutarConflicto(colisionUsername);
+		String descripcion = ejecutarConflicto(colisionUsername).getDescription();
 
 		// Assert
-		assertThat(cuerpo)
+		assertThat(descripcion)
 				.doesNotContain("existente")
 				.doesNotContain("secreto-tecleado")
 				.doesNotContain("username")
 				.doesNotContain("email")
-				.doesNotContain("\"password\"");
-		assertThat(cuerpo).contains("No se pudo completar el registro con los datos proporcionados");
+				.doesNotContain("password")
+				.isEqualTo("No se pudo completar el registro con los datos proporcionados");
 	}
 
-	private String ejecutarConflicto(String body) throws Exception {
-		return mockMvc.perform(post("/api/v1/registro").contentType(MediaType.APPLICATION_JSON).content(body))
-				.andExpect(status().isConflict())
-				.andReturn().getResponse().getContentAsString();
-	}
-
-	private static String sinTimestamp(String json) {
-		return json.replaceAll("\"timestamp\"\\s*:\\s*\"[^\"]*\"", "\"timestamp\":\"<>\"");
+	private Status ejecutarConflicto(RegistrarUsuarioRequest request) {
+		CapturingStreamObserver<RegistrarUsuarioResponse> observer = new CapturingStreamObserver<>();
+		controller.registrar(request, observer);
+		assertThat(observer.tieneError()).isTrue();
+		return observer.errorDeEstado().getStatus();
 	}
 }

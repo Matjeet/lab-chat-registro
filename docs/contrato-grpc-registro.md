@@ -3,10 +3,12 @@
 Referencia para que **otro servicio** consuma por gRPC el alta de usuarios de
 **chat-registro**, sin necesidad de leer el código de este repositorio.
 
-Es el **mismo contrato y el mismo flujo** que `POST /api/v1/registro` (ver
-[`contratos-api.md`](contratos-api.md)) — mismas reglas de validación, mismas reglas de
-negocio, mismo `RegistroService` por debajo. Solo cambia el protocolo de transporte. Si ya
-integraste el REST, no hay nada nuevo que aprender salvo el mapeo de errores (§4).
+Este es el **único protocolo** que expone chat-registro para el registro. El REST del
+sistema lo sirve `chat-gateway` (`POST /api/v1/registro` en su propio contrato), que reenvía
+aquí por gRPC — si estás integrando el flujo de registro desde el frontend o desde fuera del
+sistema, probablemente quieras la documentación de `chat-gateway`, no esta; este documento es
+para quien hable **directamente** con chat-registro (el propio `chat-gateway`, u otro
+servicio interno).
 
 La fuente de verdad ejecutable es el propio `.proto`:
 [`src/main/proto/registro.proto`](../src/main/proto/registro.proto).
@@ -18,17 +20,17 @@ La fuente de verdad ejecutable es el propio `.proto`:
 | Aspecto | Valor |
 |---|---|
 | Protocolo | gRPC (HTTP/2), **texto plano, sin TLS** (`-plaintext` en `grpcurl`, canal `usePlaintext()` en el cliente) |
-| Host:puerto (local) | `localhost:9090` — puerto propio e independiente del HTTP (`8081`) |
+| Host:puerto (local) | `localhost:9090` — puerto TCP propio del servidor gRPC (independiente del `server.port` HTTP, que hoy solo usa Actuator) |
 | Variable de entorno del servidor | `GRPC_SERVER_PORT` (por defecto `9090`); `GRPC_SERVER_ENABLED=false` apaga el servidor por completo |
 | Paquete proto | `com.arquetipo.demo.registro.grpc` |
 | Servicio | `RegistroGrpcService` |
 | Método (rpc) | `Registrar(RegistrarUsuarioRequest) returns (RegistrarUsuarioResponse)` — unario, sin streaming |
 | Reflexión de servicio | Habilitada (`io.grpc:grpc-services`) — un cliente puede descubrir el contrato sin tener el `.proto`, ver §6 |
-| Autenticación | Ninguna, igual que el REST — es el propio alta |
+| Autenticación | Ninguna — es el propio alta. Pensado para tráfico interno (p. ej. `chat-gateway`), no para exponerse directamente a internet. |
 
-> El puerto real por entorno lo define infraestructura (igual que el `8081` del REST); en
-> producción probablemente vaya detrás de un proxy/gateway con TLS. Pregunta al equipo de
-> infraestructura la dirección de tu entorno si no es `localhost:9090`.
+> El puerto real por entorno lo define infraestructura; en producción probablemente vaya
+> detrás de una red interna o un proxy con TLS. Pregunta al equipo de infraestructura la
+> dirección de tu entorno si no es `localhost:9090`.
 
 ---
 
@@ -68,7 +70,7 @@ message RegistrarUsuarioResponse {
 
 ### `RegistrarUsuarioRequest`
 
-| Campo | Tipo proto | Obligatorio | Reglas (idénticas al REST, ver `contratos-api.md` §3.1) |
+| Campo | Tipo proto | Obligatorio | Reglas |
 |---|---|---|---|
 | `username` | `string` | sí | 3–50 caracteres. Solo `A–Z a–z 0–9 . _ -`. Único (sin distinguir mayúsculas). |
 | `email` | `string` | sí | Formato de email válido. Máx. 255 caracteres. Único (sin distinguir mayúsculas). Se normaliza a minúsculas antes de guardar. |
@@ -87,10 +89,9 @@ message RegistrarUsuarioResponse {
 | `email` | `string` | Normalizado a minúsculas. |
 | `proveedor` | `string` | Proveedor de identidad usado en el alta (hoy siempre `"password"`). |
 | `activo` | `bool` | Siempre `true` en un alta nueva. |
-| `created_at` | `string` | Instante de creación en UTC, **ISO-8601** (mismo formato que el `createdAt` del REST, ej. `"2026-09-08T20:53:47.441193Z"`). Se manda como `string`, no como `google.protobuf.Timestamp`, para no forzar esa dependencia en el cliente. |
+| `created_at` | `string` | Instante de creación en UTC, **ISO-8601** (ej. `"2026-09-08T20:53:47.441193Z"`). Se manda como `string`, no como `google.protobuf.Timestamp`, para no forzar esa dependencia en el cliente. |
 
-> El UID del proveedor de identidad **no** se devuelve — igual que en el REST, el cliente no lo
-> necesita.
+> El UID del proveedor de identidad **no** se devuelve — el cliente no lo necesita.
 
 ---
 
@@ -144,24 +145,25 @@ try {
 ## 4. Errores
 
 gRPC no tiene *Problem Details*: los errores llegan como `StatusRuntimeException` con un
-`Status.Code` y una `description` de texto libre. Mismo principio de seguridad que el REST
-(§2 de `contratos-api.md`): **mensaje genérico al cliente, detalle real solo en el log del
-servidor** — nunca asumas que la ausencia de un `4xx`/`5xx` HTTP equivalente significa menos
-información filtrada; aquí es la misma disciplina, solo que expresada con códigos gRPC.
+`Status.Code` y una `description` de texto libre. **Mensaje genérico al cliente, detalle real
+solo en el log del servidor** — la ausencia de un código HTTP no significa menos disciplina
+aquí, es la misma politica de seguridad expresada con códigos gRPC.
 
-| Situación | Código gRPC | `description` | Equivalente REST |
-|---|---|---|---|
-| El cuerpo no supera Bean Validation | `INVALID_ARGUMENT` | `"El cuerpo de la peticion no supero la validacion -> <campo>: <mensaje>; ..."` (un `campo: mensaje` por cada violación) | `400` + `errors[]` |
-| `username`/`email` duplicado, o el usuario ya existe en el proveedor de identidad | `ALREADY_EXISTS` | Mensaje genérico fijo: `"No se pudo completar el registro con los datos proporcionados"` — **nunca** indica qué campo colisionó | `409` |
-| Cualquier otro fallo (proveedor de identidad, base de datos, bug interno) | `INTERNAL` | Mensaje genérico fijo: `"Ocurrio un error inesperado. Contacte con soporte."` | `500` |
+| Situación | Código gRPC | `description` |
+|---|---|---|
+| El cuerpo no supera Bean Validation | `INVALID_ARGUMENT` | `"El cuerpo de la peticion no supero la validacion -> <campo>: <mensaje>; ..."` (un `campo: mensaje` por cada violación) |
+| `username`/`email` duplicado, o el usuario ya existe en el proveedor de identidad | `ALREADY_EXISTS` | Mensaje genérico fijo: `"No se pudo completar el registro con los datos proporcionados"` — **nunca** indica qué campo colisionó |
+| Cualquier otro fallo (proveedor de identidad, base de datos, bug interno) | `INTERNAL` | Mensaje genérico fijo: `"Ocurrio un error inesperado. Contacte con soporte."` |
+
+Si accedes al registro a través de `chat-gateway` (REST), es su propia documentación la que
+dice cómo traduce estos códigos a HTTP — no lo asumas desde aquí.
 
 Notas:
 
 - **No ramifiques por `description` en `INVALID_ARGUMENT`.** El texto de cada violación es el
-  mensaje por defecto de Bean Validation (igual que `errors[].message` en el REST): orientativo,
-  puede cambiar de redacción. Si necesitas marcar campos en una UI, valida tú mismo en el
-  cliente con las reglas de la tabla de §2 antes de llamar, igual que recomienda
-  `contratos-api.md` §4.6 para el REST.
+  mensaje por defecto de Bean Validation: orientativo, puede cambiar de redacción. Si
+  necesitas marcar campos en una UI, valida tú mismo en el cliente con las reglas de la tabla
+  de §2 antes de llamar.
 - **El `ALREADY_EXISTS` es deliberadamente genérico**, por la misma razón que el `409` REST:
   evitar que alguien enumere cuentas probando emails/usernames. No reintentes asumiendo que es
   transitorio.
@@ -172,12 +174,11 @@ Notas:
 
 ## 5. Cómo funciona por dentro
 
-`RegistroGrpcController` (`com.arquetipo.demo.registro.grpc`) es un espejo de
-`RegistroController`: no reimplementa ninguna regla, solo traduce el mensaje proto al mismo
-`RegistroRequest` que usa el REST y delega en el mismo `RegistroService`. La orquestación
-completa (alta en el proveedor de identidad, reconciliación si ya existía, compensación si el
-guardado local falla) es exactamente la descrita en `contratos-api.md` §6 — no se repite aquí
-porque es literalmente el mismo código ejecutándose para los dos protocolos.
+`RegistroGrpcController` (`com.arquetipo.demo.registro.grpc`) no reimplementa ninguna regla:
+traduce el mensaje proto a `RegistroRequest` y delega en `RegistroService`, que es quien
+orquesta todo (alta en el proveedor de identidad, reconciliación si ya existía, compensación
+si el guardado local falla) — ver `README.md` §*Orquestación y compensación* para el detalle
+completo.
 
 ---
 
@@ -201,4 +202,5 @@ pueden listar servicios y construir la petición sin el archivo, apuntando solo 
 
 | Fecha | Cambio |
 |---|---|
+| 2026-09-18 | Se retira el REST de este servicio (`RegistroController`/`RegistroApi`, CORS, Swagger): gRPC pasa a ser el único protocolo. `chat-gateway` es ahora el único punto de entrada REST del sistema y reenvía aquí. Se actualizan las referencias a `contratos-api.md` (eliminado). |
 | 2026-09-13 | Versión inicial: contrato gRPC de `RegistroGrpcService/Registrar`, espejo de `POST /api/v1/registro`. |

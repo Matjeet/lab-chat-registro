@@ -42,18 +42,12 @@ firebase:
 
 grpc:
   server:
-    # Servidor gRPC embebido (com.arquetipo.demo.common.grpc), espejo del REST de registro.
-    # false desactiva por completo su arranque (los tests lo hacen, ver src/test/resources).
+    # Servidor gRPC embebido (com.arquetipo.demo.common.grpc) — unico protocolo de este
+    # servicio para el registro. false desactiva por completo su arranque (los tests lo hacen,
+    # ver src/test/resources).
     enabled: ${GRPC_SERVER_ENABLED:true}
-    # Puerto TCP propio, independiente de server.port (HTTP).
+    # Puerto TCP propio, independiente de server.port (HTTP, solo usado hoy por Actuator).
     port: ${GRPC_SERVER_PORT:9090}
-
-app:
-  cors:
-    # Origenes permitidos para /api/**. Lista separada por comas, cada uno con esquema +
-    # host + puerto y SIN barra final (p. ej. "https://chat.example.com,http://localhost:3000").
-    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000}
-    allow-credentials: ${CORS_ALLOW_CREDENTIALS:false}
 
 server:
   port: 8081
@@ -69,12 +63,6 @@ management:
   endpoint:
     health:
       show-details: when-authorized
-
-springdoc:
-  swagger-ui:
-    path: /swagger-ui.html
-    operations-sorter: method
-    tags-sorter: alpha
 
 logging:
   level:
