@@ -60,10 +60,12 @@ public class RegistroGrpcController extends RegistroGrpcServiceGrpc.RegistroGrpc
 	@Override
 	public void registrar(RegistrarUsuarioRequest grpcRequest,
 			StreamObserver<RegistrarUsuarioResponse> responseObserver) {
+		log.debug(">> registrar(username='{}', email='{}')", grpcRequest.getUsername(), grpcRequest.getEmail());
 		RegistroRequest request = mapper.aRegistroRequest(grpcRequest);
 
 		Set<ConstraintViolation<RegistroRequest>> violaciones = validator.validate(request);
 		if (!violaciones.isEmpty()) {
+			log.debug("<< registrar() -> INVALID_ARGUMENT ({} violacion(es))", violaciones.size());
 			responseObserver.onError(errorDeValidacion(violaciones));
 			return;
 		}
@@ -72,10 +74,13 @@ public class RegistroGrpcController extends RegistroGrpcServiceGrpc.RegistroGrpc
 			RegistroResponse resultado = service.registrar(request);
 			responseObserver.onNext(mapper.aGrpcResponse(resultado));
 			responseObserver.onCompleted();
+			log.debug("<< registrar() -> OK, id={}", resultado.id());
 		} catch (DuplicateResourceException ex) {
+			log.debug("<< registrar() -> ALREADY_EXISTS");
 			responseObserver.onError(Status.ALREADY_EXISTS.withDescription(ex.getMessage()).asRuntimeException());
 		} catch (Exception ex) {
 			log.error("Excepcion no controlada en el endpoint gRPC de registro", ex);
+			log.debug("<< registrar() -> INTERNAL");
 			responseObserver.onError(Status.INTERNAL.withDescription(DETALLE_ERROR_INTERNO).asRuntimeException());
 		}
 	}

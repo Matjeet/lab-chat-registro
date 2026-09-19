@@ -67,6 +67,7 @@ public class RegistroService {
 	public RegistroResponse registrar(RegistroRequest request) {
 		String username = request.username().trim();
 		String email = request.email().trim().toLowerCase();
+		log.debug(">> registrar(username='{}', email='{}')", username, email);
 
 		if (repository.existsByUsernameIgnoreCase(username)) {
 			log.warn("Registro rechazado: el username ya esta registrado. username='{}'", username);
@@ -81,13 +82,19 @@ public class RegistroService {
 
 		try {
 			UsuarioExterno creado = proveedorIdentidad.crearUsuario(email, request.password());
-			return guardar(username, email, creado, proveedor, true);
+			RegistroResponse respuesta = guardar(username, email, creado, proveedor, true);
+			log.debug("<< registrar() -> OK, id={}", respuesta.id());
+			return respuesta;
 		} catch (UsuarioYaRegistradoException ex) {
 			log.warn("El proveedor de identidad ya tenia un usuario con este email; "
 					+ "se intenta reconciliar. email='{}' motivo='{}'", email, ex.getMessage());
-			return reconciliar(username, email, proveedor);
+			RegistroResponse respuesta = reconciliar(username, email, proveedor);
+			log.debug("<< registrar() -> OK (reconciliado), id={}", respuesta.id());
+			return respuesta;
 		} catch (ProveedorIdentidadException ex) {
 			log.error("Fallo al crear el usuario en el proveedor de identidad. email='{}'", email, ex);
+			// Sin log de fin a proposito: la ausencia de "<< registrar()" marca el punto exacto
+			// del fallo cuando se lee el log de arriba hacia abajo.
 			throw ex;
 		}
 	}
@@ -98,6 +105,7 @@ public class RegistroService {
 	 * conflicto real.
 	 */
 	private RegistroResponse reconciliar(String username, String email, ProveedorAuth proveedor) {
+		log.debug(">> reconciliar(email='{}')", email);
 		UsuarioExterno existente = proveedorIdentidad.buscarPorEmail(email)
 				.orElseThrow(() -> {
 					log.warn("El proveedor dijo que el email ya existia pero no se encontro al buscarlo. "
@@ -115,11 +123,14 @@ public class RegistroService {
 				+ "en el proveedor de identidad. email='{}' uid='{}'", email, existente.uid());
 		// No se compensa (no borrar) si el guardado fallara: el usuario ya existia en el
 		// proveedor antes de esta peticion, no lo creamos nosotros ahora.
-		return guardar(username, email, existente, proveedor, false);
+		RegistroResponse respuesta = guardar(username, email, existente, proveedor, false);
+		log.debug("<< reconciliar() -> OK, id={}", respuesta.id());
+		return respuesta;
 	}
 
 	private RegistroResponse guardar(String username, String email, UsuarioExterno usuarioExterno,
 			ProveedorAuth proveedor, boolean revertirEnProveedorSiFalla) {
+		log.debug(">> guardar(username='{}', email='{}', uid='{}')", username, email, usuarioExterno.uid());
 		Usuario usuario = new Usuario();
 		usuario.setUsername(username);
 		usuario.setEmail(email);
@@ -130,7 +141,9 @@ public class RegistroService {
 		try {
 			Usuario guardado = repository.saveAndFlush(usuario);
 			log.debug("Usuario registrado id={} username='{}'", guardado.getId(), guardado.getUsername());
-			return mapper.toResponse(guardado);
+			RegistroResponse respuesta = mapper.toResponse(guardado);
+			log.debug("<< guardar() -> OK, id={}", respuesta.id());
+			return respuesta;
 		} catch (DataIntegrityViolationException ex) {
 			// Carrera entre la comprobacion previa y el insert: el detalle va al log, no al cliente.
 			log.warn("Registro rechazado por restriccion de unicidad en el insert. "
@@ -143,8 +156,10 @@ public class RegistroService {
 	}
 
 	private void revertirEnProveedor(String uidExterno) {
+		log.debug(">> revertirEnProveedor(uid='{}')", uidExterno);
 		try {
 			proveedorIdentidad.eliminarUsuario(uidExterno);
+			log.debug("<< revertirEnProveedor() -> OK");
 		} catch (Exception ex) {
 			log.error("No se pudo revertir el usuario del proveedor de identidad tras un fallo de "
 					+ "guardado local; requiere limpieza manual. uid='{}'", uidExterno, ex);
@@ -152,14 +167,17 @@ public class RegistroService {
 	}
 
 	private ProveedorAuth resolverProveedor() {
+		log.debug(">> resolverProveedor()");
 		// El nombre lo decide el proveedor de identidad (nunca el cliente). El @Pattern de
 		// RegistroRequest ya no existe para "proveedor" porque ya no es un campo de la
 		// peticion; si aun asi no aparece en proveedores_auth es un desalineamiento del
 		// propio servidor (bug de despliegue: falta sembrar la migracion), no un dato
 		// invalido del cliente -> error interno (500).
 		String nombreProveedor = proveedorIdentidad.nombreProveedor();
-		return proveedorRepository.findByNombreIgnoreCase(nombreProveedor)
+		ProveedorAuth proveedor = proveedorRepository.findByNombreIgnoreCase(nombreProveedor)
 				.orElseThrow(() -> new IllegalStateException(
 						"Proveedor de autenticacion no encontrado en proveedores_auth: " + nombreProveedor));
+		log.debug("<< resolverProveedor() -> OK, nombre='{}'", nombreProveedor);
+		return proveedor;
 	}
 }

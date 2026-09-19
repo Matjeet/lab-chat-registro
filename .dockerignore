@@ -7,3 +7,12 @@ bin
 *.iml
 *.log
 HELP.md
+
+# El Dockerfile ya no los copia (usa COPY selectivo, no `COPY . .`), pero se excluyen aqui
+# tambien como defensa en profundidad si eso cambia algun dia — nunca deben entrar a una
+# imagen (mismo criterio que .gitignore).
+.env
+.env.*
+!.env.example
+firebase-service-account*.json
+*firebase-adminsdk*.json
