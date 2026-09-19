@@ -1,6 +1,5 @@
 package com.arquetipo.demo.registro.web.dto;
 
-import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
@@ -13,35 +12,26 @@ import jakarta.validation.constraints.Size;
  * {@code email}/{@code password}; el UID y el proveedor los determina el servidor, nunca el
  * cliente (ver {@code RegistroService}). La contrasena solo se reenvia al proveedor: este
  * servicio no la persiste en ningun sitio.
+ *
+ * <p>Es el mismo contrato para los dos protocolos que expone el servicio: lo recibe
+ * directamente el gRPC ({@code RegistroGrpcController} lo construye desde
+ * {@code RegistrarUsuarioRequest}) y su validacion (Bean Validation) es la unica fuente de
+ * verdad de las reglas de {@code username}/{@code email}/{@code password} — no hay una capa
+ * OpenAPI/Swagger aparte que las repita.
  */
-@Schema(name = "RegistroRequest", description = "Datos para registrar un usuario nuevo")
 public record RegistroRequest(
 
-		@Schema(
-				description = "Nombre de usuario unico. Solo letras, numeros y los signos . _ -",
-				example = "mateo",
-				minLength = 3, maxLength = 50)
 		@NotBlank
 		@Size(min = 3, max = 50)
 		@Pattern(regexp = "^[a-zA-Z0-9._-]+$",
 				message = "solo admite letras, numeros y los signos . _ -")
 		String username,
 
-		@Schema(
-				description = "Correo electronico unico. Se normaliza a minusculas.",
-				example = "mateo@example.com",
-				maxLength = 255)
 		@NotBlank
 		@Email
 		@Size(max = 255)
 		String email,
 
-		@Schema(
-				description = "Contrasena en claro: se reenvia al proveedor de identidad "
-						+ "(Firebase Auth) y no se guarda en este servicio.",
-				example = "Passw0rd!23",
-				minLength = 8, maxLength = 20,
-				format = "password")
 		@NotBlank
 		@Size(min = 8, max = 20)
 		@Pattern(

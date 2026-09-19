@@ -1,15 +1,15 @@
 package com.arquetipo.demo.security;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.arquetipo.demo.registro.domain.ProveedorAuth;
 import com.arquetipo.demo.registro.domain.Usuario;
+import com.arquetipo.demo.registro.grpc.CapturingStreamObserver;
+import com.arquetipo.demo.registro.grpc.RegistrarUsuarioRequest;
+import com.arquetipo.demo.registro.grpc.RegistrarUsuarioResponse;
+import com.arquetipo.demo.registro.grpc.RegistroGrpcController;
 import com.arquetipo.demo.registro.identidad.ProveedorIdentidad;
 import com.arquetipo.demo.registro.identidad.UsuarioExterno;
 import com.arquetipo.demo.registro.repository.ProveedorAuthRepository;
@@ -23,10 +23,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
-import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
-import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -36,13 +33,12 @@ import org.springframework.transaction.annotation.Transactional;
  * la reenvia y nunca la persiste, nunca la devuelve y nunca la registra en el log.
  */
 @SpringBootTest
-@AutoConfigureMockMvc
 @ExtendWith(OutputCaptureExtension.class)
 @Transactional
 class A02CryptographicFailuresTest {
 
 	@Autowired
-	private MockMvc mockMvc;
+	private RegistroGrpcController controller;
 
 	@Autowired
 	private UsuarioRepository usuarioRepository;
@@ -78,49 +74,47 @@ class A02CryptographicFailuresTest {
 	}
 
 	@Test
-	void registro_laContrasenaSeReenviaAlProveedorPeroNuncaSePersisteNiSeDevuelve() throws Exception {
+	void registro_laContrasenaSeReenviaAlProveedorPeroNuncaSePersisteNiSeDevuelve() {
 		// Arrange
 		String contrasena = "Passw0rd!23";
 		when(proveedorIdentidad.crearUsuario(eq("cripto1@example.com"), eq(contrasena)))
 				.thenReturn(new UsuarioExterno("fb-cripto1"));
-		String body = """
-				{"username":"cripto1","email":"cripto1@example.com","password":"%s"}
-				""".formatted(contrasena);
+		CapturingStreamObserver<RegistrarUsuarioResponse> observer = new CapturingStreamObserver<>();
 
 		// Act
-		String respuesta = mockMvc.perform(post("/api/v1/registro")
-						.contentType(MediaType.APPLICATION_JSON).content(body))
-				.andExpect(status().isCreated())
-				.andExpect(jsonPath("$.password").doesNotExist())
-				.andExpect(jsonPath("$.passwordHash").doesNotExist())
-				.andReturn().getResponse().getContentAsString();
+		controller.registrar(RegistrarUsuarioRequest.newBuilder()
+				.setUsername("cripto1").setEmail("cripto1@example.com").setPassword(contrasena)
+				.build(), observer);
 
-		// Assert: el proveedor SI recibio la contrasena en claro (es lo que hace falta)...
+		// Assert: la respuesta no lleva contrasena en ningun campo (el mensaje proto no tiene
+		// ese campo) ni en su representacion completa...
+		assertThat(observer.tieneError()).isFalse();
+		RegistrarUsuarioResponse respuesta = observer.valor();
+		assertThat(respuesta).isNotNull();
+		assertThat(respuesta.toString()).doesNotContain(contrasena);
+		// ...el proveedor SI recibio la contrasena en claro (es lo que hace falta)...
 		org.mockito.Mockito.verify(proveedorIdentidad).crearUsuario("cripto1@example.com", contrasena);
-		// ...pero ni la respuesta ni la entidad persistida la conservan en ningun lado
-		assertThat(respuesta).doesNotContain(contrasena);
+		// ...pero la entidad persistida no la conserva en ningun lado
 		Usuario guardado = usuarioRepository.findByUsernameIgnoreCase("cripto1").orElseThrow();
 		assertThat(guardado.getFirebaseUid()).isEqualTo("fb-cripto1");
 	}
 
 	@Test
-	void registro_laContrasenaNuncaApareceEnElLogDelServidor(CapturedOutput output) throws Exception {
+	void registro_laContrasenaNuncaApareceEnElLogDelServidor(CapturedOutput output) {
 		// Arrange: un alta real, para que el segundo intento colisione con username de verdad
 		// (fuerza la ruta WARN de conflicto, que siempre se registra en el log)
-		when(proveedorIdentidad.crearUsuario(eq("cripto2@example.com"), any()))
+		when(proveedorIdentidad.crearUsuario(eq("cripto2@example.com"), org.mockito.ArgumentMatchers.any()))
 				.thenReturn(new UsuarioExterno("fb-cripto2"));
-		mockMvc.perform(post("/api/v1/registro").contentType(MediaType.APPLICATION_JSON)
-				.content("""
-						{"username":"yaexiste","email":"cripto2@example.com","password":"Passw0rd!23"}
-						"""));
+		controller.registrar(RegistrarUsuarioRequest.newBuilder()
+				.setUsername("yaexiste").setEmail("cripto2@example.com").setPassword("Passw0rd!23")
+				.build(), new CapturingStreamObserver<>());
 
 		String contrasenaDistintiva = "N0DebeAparecerEnLogs!1";
 
 		// Act: reintento con el mismo username -> conflicto local, ni siquiera llama al proveedor
-		mockMvc.perform(post("/api/v1/registro").contentType(MediaType.APPLICATION_JSON)
-				.content("""
-						{"username":"yaexiste","email":"otro-cripto2@example.com","password":"%s"}
-						""".formatted(contrasenaDistintiva)));
+		controller.registrar(RegistrarUsuarioRequest.newBuilder()
+				.setUsername("yaexiste").setEmail("otro-cripto2@example.com").setPassword(contrasenaDistintiva)
+				.build(), new CapturingStreamObserver<>());
 
 		// Assert
 		assertThat(output.getOut()).doesNotContain(contrasenaDistintiva);
