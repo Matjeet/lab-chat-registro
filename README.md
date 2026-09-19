@@ -204,6 +204,36 @@ reglas) → `Repository` (JPA) → `Entity`. El `Mapper`/`RegistroGrpcMapper` tr
 
 Tests: `./gradlew test` · Empaquetar: `./gradlew bootJar` · Docker: `docker build -t chat-registro .`
 
+## Docker
+
+```bash
+docker build -t chat-registro .        # o: podman build -t chat-registro .
+```
+
+Build multi-etapa (`eclipse-temurin:25-jdk` compila, `eclipse-temurin:25-jre` corre el jar
+como usuario sin privilegios). Expone `8081` (HTTP, solo Actuator) y `9090` (gRPC). No
+lleva base de datos ni credenciales de Firebase dentro de la imagen — se pasan en runtime:
+
+```bash
+docker run --rm -p 8081:8081 -p 9090:9090 \
+  -e DB_URL="jdbc:mysql://<host-mysql>:3306/chat_registro?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&characterEncoding=UTF-8" \
+  -e DB_USERNAME=chat_registro_svc \
+  -e DB_PASSWORD=chat_registro_pw \
+  -e FIREBASE_ENABLED=true \
+  -e FIREBASE_CREDENTIALS_PATH=/run/secrets/firebase-service-account.json \
+  -v /ruta/local/firebase-service-account.json:/run/secrets/firebase-service-account.json:ro \
+  chat-registro
+```
+
+> `<host-mysql>` no es `localhost` si MySQL corre en el host y la app en un contenedor —
+> usa el nombre del contenedor de MySQL si están en la misma red, o `host.docker.internal`
+> / `host.containers.internal` si MySQL escucha en todas las interfaces del host (por
+> defecto muchas instalaciones locales solo escuchan en `127.0.0.1` y no son alcanzables
+> así). Verificado end-to-end con Podman: imagen construida, MySQL real (esquema provisionado
+> con `db/bootstrap.sql`) y Firebase real en un contenedor aparte — Flyway migra, el
+> servidor gRPC arranca en `9090` y un `Registrar` real crea el usuario en Firebase y en la
+> base de datos.
+
 ## Protocolo gRPC
 
 `registro/grpc/RegistroGrpcController` es el **único protocolo** que expone este servicio
