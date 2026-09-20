@@ -11,9 +11,11 @@ option java_outer_classname = "RegistroProto";
 service RegistroGrpcService {
   rpc Registrar (RegistrarUsuarioRequest) returns (RegistrarUsuarioResponse);
 
-  // Resuelve username/email a partir del uid de Firebase de una sesion ya autenticada (p. ej.
-  // el gateway, tras validar el idToken del cliente, necesita saber a que cuenta corresponde).
-  // NOT_FOUND si el uid no corresponde a ningun usuario registrado.
+  // Resuelve username/email a partir del uid de Firebase de una sesion ya autenticada. Quien
+  // llama (siempre chat-gateway, nunca el cliente final) ya autentico y autorizo la peticion
+  // el mismo antes de llegar aqui -- este servicio no valida tokens de identidad, confia en
+  // que el uid que recibe ya fue verificado. NOT_FOUND si el uid no corresponde a ningun
+  // usuario registrado.
   rpc BuscarUsuarioPorUid (BuscarUsuarioPorUidRequest) returns (BuscarUsuarioPorUidResponse);
 }
 
@@ -42,8 +44,9 @@ message RegistrarUsuarioResponse {
 
 message BuscarUsuarioPorUidRequest {
   // UID que asigna Firebase Authentication al crear la cuenta (el mismo que devuelve
-  // RegistrarUsuarioResponse indirectamente via el registro; aqui lo aporta el cliente que
-  // ya se autentico contra Firebase). Identificador opaco, no un secreto, pero obligatorio.
+  // RegistrarUsuarioResponse indirectamente via el registro). Identificador opaco, no un
+  // secreto, pero obligatorio. Quien llama ya verifico que quien pregunta es su dueno --
+  // chat-registro no repite esa comprobacion, ver la nota del rpc arriba.
   string uid = 1;
 }
 

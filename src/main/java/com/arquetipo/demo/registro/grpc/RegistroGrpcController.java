@@ -44,9 +44,11 @@ import org.springframework.stereotype.Component;
  *
  * <p>{@code buscarUsuarioPorUid}: {@code uid} vacio -&gt; {@code INVALID_ARGUMENT}; sin
  * usuario con ese uid -&gt; {@code NOT_FOUND}; cualquier otra excepcion -&gt; {@code INTERNAL}
- * (mismo criterio de log que arriba). Aqui el mensaje de {@code NOT_FOUND} no necesita ser
- * generico: no es un alta con riesgo de enumeracion de cuentas por username/email, es una
- * consulta puntual por un UID opaco que ya posee quien pregunta.
+ * (mismo criterio de log que arriba). No valida ningun token: quien llama (siempre
+ * {@code chat-gateway}) ya autentico y autorizo la peticion antes de invocar este rpc — ver
+ * {@code docs/contrato-grpc-registro.md} §1. Aqui el mensaje de {@code NOT_FOUND} no necesita
+ * ser generico: no es un alta con riesgo de enumeracion de cuentas por username/email, es una
+ * consulta puntual por un UID opaco.
  */
 @Slf4j
 @Component

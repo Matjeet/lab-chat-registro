@@ -104,13 +104,19 @@ public class RegistroService {
 	}
 
 	/**
-	 * Resuelve username/email a partir del UID que Firebase le asigno al usuario. Pensado para
-	 * que otro servicio (via gRPC, normalmente {@code chat-gateway} tras validar el idToken del
-	 * cliente) sepa a que cuenta corresponde una sesion ya autenticada.
+	 * Resuelve username/email a partir del UID que Firebase le asigno al usuario, para que otro
+	 * servicio (via gRPC, siempre {@code chat-gateway}) sepa a que cuenta corresponde una
+	 * sesion ya autenticada.
+	 *
+	 * <p>Este servicio <b>no</b> valida tokens de identidad ni comprueba que quien pregunta sea
+	 * el dueno del uid — esa autenticacion y autorizacion las resuelve {@code chat-gateway}
+	 * antes de llamar aqui (es el unico punto del sistema con integracion con Firebase para
+	 * verificar tokens); esta consulta confia en el uid que recibe.
 	 */
 	@Transactional(readOnly = true)
 	public UsuarioBasico buscarPorFirebaseUid(String uid) {
 		log.debug(">> buscarPorFirebaseUid(uid='{}')", uid);
+
 		UsuarioBasico resultado = repository.findByFirebaseUid(uid)
 				.map(mapper::toUsuarioBasico)
 				.orElseThrow(() -> {

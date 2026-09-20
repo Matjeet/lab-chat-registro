@@ -26,7 +26,7 @@ La fuente de verdad ejecutable es el propio `.proto`:
 | Servicio | `RegistroGrpcService` |
 | Métodos (rpc) | `Registrar(RegistrarUsuarioRequest) returns (RegistrarUsuarioResponse)` · `BuscarUsuarioPorUid(BuscarUsuarioPorUidRequest) returns (BuscarUsuarioPorUidResponse)` — ambos unarios, sin streaming |
 | Reflexión de servicio | Habilitada (`io.grpc:grpc-services`) — un cliente puede descubrir el contrato sin tener el `.proto`, ver §7 |
-| Autenticación | Ninguna — es el propio alta. Pensado para tráfico interno (p. ej. `chat-gateway`), no para exponerse directamente a internet. |
+| Autenticación | Ninguna en ninguno de los dos rpc. **Este servicio no valida tokens de identidad**: `chat-gateway` es el único punto del sistema con integración con Firebase para verificar tokens (`Authorization: Bearer <idToken>`) — a `chat-registro` solo le llega, ya autenticado y autorizado, el dato que necesita (p. ej. el `uid` en `BuscarUsuarioPorUid`). Pensado para tráfico interno exclusivamente; nunca se expone directamente a internet. |
 
 > El puerto real por entorno lo define infraestructura; en producción probablemente vaya
 > detrás de una red interna o un proxy con TLS. Pregunta al equipo de infraestructura la
@@ -105,9 +105,10 @@ message BuscarUsuarioPorUidResponse {
 
 ### `BuscarUsuarioPorUidRequest` / `BuscarUsuarioPorUidResponse`
 
-Resuelve a qué cuenta corresponde una sesión ya autenticada en Firebase, a partir de su UID
-— pensado para `chat-gateway`, que valida el `idToken` del cliente (ahí obtiene el uid) y
-necesita el `username`/`email` de dominio, que Firebase no conoce.
+Resuelve a qué cuenta corresponde una sesión ya autenticada en Firebase, a partir de su UID —
+pensado para `chat-gateway`, que ya autenticó al cliente (verificó su `idToken` con su propia
+integración con Firebase Admin SDK) y comprobó que autoriza a consultar justo ese `uid` **antes
+de llamar aquí**. `chat-registro` no repite esa verificación: confía en el `uid` que recibe.
 
 | Campo | Mensaje | Tipo proto | Obligatorio | Descripción |
 |---|---|---|---|---|
@@ -219,8 +220,8 @@ Notas:
 
 Aquí **no** aplica el mensaje genérico: no es un alta con riesgo de enumeración de cuentas
 por username/email — es una consulta puntual por un UID opaco (28 caracteres, no
-correlativo) que quien pregunta ya posee de antemano (lo sacó del `idToken` que él mismo
-validó). El `NOT_FOUND` puede describir la situación tal cual.
+correlativo) que quien pregunta ya posee de antemano. El `NOT_FOUND` puede describir la
+situación tal cual.
 
 | Situación | Código gRPC | `description` |
 |---|---|---|
@@ -228,9 +229,13 @@ validó). El `NOT_FOUND` puede describir la situación tal cual.
 | Ningún usuario con ese `uid` | `NOT_FOUND` | `"Usuario no encontrado"` |
 | Cualquier otro fallo (base de datos, bug interno) | `INTERNAL` | Mensaje genérico fijo: `"Ocurrio un error inesperado. Contacte con soporte."` |
 
+> Este rpc no tiene ningún código de autenticación (`UNAUTHENTICATED`/`PERMISSION_DENIED`):
+> esa responsabilidad es enteramente de `chat-gateway`, que valida el `idToken` con su propia
+> integración con Firebase **antes** de llamar aquí — ver §6.
+
 Si accedes a cualquiera de los dos rpc a través de `chat-gateway` (REST), es su propia
-documentación la que dice cómo traduce estos códigos a HTTP — no lo asumas desde aquí (ver
-§6 para una propuesta de ese mapeo).
+documentación la que dice cómo traduce los códigos de arriba a HTTP, y cómo maneja además la
+autenticación que este servicio no ve — ver §6.
 
 **Un fallo de conexión** (servidor caído, puerto equivocado) llega como `UNAVAILABLE` en
 cualquiera de los dos rpc — no está en las tablas porque no lo genera este servicio, es
@@ -248,22 +253,23 @@ infraestructura de gRPC.
   para el detalle completo.
 - `BuscarUsuarioPorUid` delega en `RegistroService.buscarPorFirebaseUid(uid)`, que hace una
   única consulta de solo lectura (`UsuarioRepository.findByFirebaseUid`) — no hay
-  orquestación ni compensación que explicar aquí, es una lectura directa.
+  orquestación, compensación, ni verificación de identidad que explicar aquí: eso lo resuelve
+  `chat-gateway` antes de llamar a este rpc (ver §6).
 
 ---
 
-## 6. Sugerencia de contrato REST (para `chat-gateway`)
+## 6. Contrato REST expuesto por `chat-gateway`
 
-`chat-registro` no expone REST — esto es lo que se propone para que `chat-gateway` lo
-implemente como fachada REST de `BuscarUsuarioPorUid`, siguiendo el mismo criterio que ya
-usa para `POST /api/v1/registro` (ver la documentación propia de `chat-gateway`).
+`chat-registro` no expone REST — `chat-gateway` es quien implementa esto como fachada REST de
+`BuscarUsuarioPorUid`, siguiendo el mismo criterio que ya usa para `POST /api/v1/registro`
+(Problem Details RFC 9457, ver la documentación propia de `chat-gateway`).
 
 | | |
 |---|---|
 | Método | `GET` |
 | Path | `/api/v1/usuarios/{uid}` |
 | Path param | `uid` — el UID de Firebase del usuario a resolver |
-| Autenticación | El gateway debería exigir el `idToken` de Firebase del cliente (p. ej. `Authorization: Bearer <idToken>`) y, como mínimo, verificar que el `uid` pedido coincide con el del token — si no, este endpoint se convierte en una forma de enumerar cuentas por fuerza bruta de UIDs. Esto es responsabilidad del gateway: `chat-registro` no valida tokens de Firebase, solo consulta por uid. |
+| Autenticación | El gateway exige `Authorization: Bearer <idToken>` y lo **verifica él mismo** con su propia integración con Firebase Admin SDK (`common.auth` en `chat-gateway`) — comprobando además que el uid que decodifica coincide con el `uid` pedido. A `BuscarUsuarioPorUid` en este servicio solo llega el `uid` ya autenticado: **nunca el token**. Sin la cabecera, o con un token inválido/de otro uid, el gateway rechaza (`401`/`403`) sin siquiera llamar por gRPC. |
 
 Respuesta `200 OK`:
 
@@ -274,13 +280,15 @@ Respuesta `200 OK`:
 }
 ```
 
-| Código HTTP | Cuándo | Origen (gRPC) |
+| Código HTTP | Cuándo | Resuelto por |
 |---|---|---|
-| `200` | Usuario encontrado | `OK` |
-| `400` | `uid` vacío o con formato inválido | `INVALID_ARGUMENT` |
-| `404` | Ningún usuario con ese `uid` | `NOT_FOUND` |
-| `500` | Fallo inesperado de `chat-registro` | `INTERNAL` |
-| `503` | `chat-registro` no responde | `UNAVAILABLE` (u otro error de canal gRPC) |
+| `200` | Usuario encontrado | `chat-registro` (`OK`) |
+| `400` | `uid` vacío | `chat-registro` (`INVALID_ARGUMENT`) |
+| `401` | Cabecera `Authorization` ausente/mal formada, o `idToken` inválido/expirado | **El gateway, sin llamar por gRPC** |
+| `403` | El `idToken` es válido pero pertenece a un uid distinto al pedido | **El gateway, sin llamar por gRPC** |
+| `404` | Ningún usuario con ese `uid` | `chat-registro` (`NOT_FOUND`) |
+| `500` | Fallo inesperado de `chat-registro` | `chat-registro` (`INTERNAL`) |
+| `503` | `chat-registro` no responde | El gateway (`UNAVAILABLE` u otro error de canal gRPC) |
 
 Ejemplo:
 
@@ -288,9 +296,9 @@ Ejemplo:
 curl -H "Authorization: Bearer <idToken>" http://localhost:8080/api/v1/usuarios/0lSUQS1RdYauzu3ifx6izoyzkvt2
 ```
 
-Esto es una **propuesta**, no un contrato ya implementado — quien lo construya en
-`chat-gateway` decide el formato final de error (Problem Details, como en el registro, es lo
-consistente con el resto del gateway) y si añade más campos a la respuesta más adelante.
+Contrato completo (formato de error Problem Details, modelos TypeScript) en
+`chat-gateway/docs/contratos-api.md` §4.2. Detalle de cómo el gateway valida el token en
+`chat-gateway/docs/arquitectura-gateway.md`.
 
 ---
 
@@ -314,6 +322,8 @@ pueden listar servicios y construir la petición sin el archivo, apuntando solo 
 
 | Fecha | Cambio |
 |---|---|
-| 2026-09-19 | Se añade `BuscarUsuarioPorUid` (username/email a partir del uid de Firebase) y la propuesta de contrato REST §6 para que `chat-gateway` lo exponga. |
+| 2026-09-20 | Se revierte el cambio del 2026-09-19 (2): `BuscarUsuarioPorUid` vuelve a no llevar `id_token` ni verificar nada — decisión de arquitectura explícita: **`chat-gateway` es el único punto del sistema que valida tokens de identidad** (con su propia integración con Firebase Admin SDK), para que futuros microservicios que necesiten autenticación no tengan que integrarse cada uno con Firebase. `chat-registro` conserva Firebase únicamente para crear/eliminar/buscar cuentas en el alta. Se quitan `TokenIdentidadInvalidoException`/`AccesoNoAutorizadoException` y el test `A01BrokenAccessControlTest` (esa propiedad de seguridad ahora se prueba en `chat-gateway`). |
+| 2026-09-19 (2) | *(revertido el 2026-09-20)* `BuscarUsuarioPorUid` pasó a exigir y verificar `id_token` él mismo. |
+| 2026-09-19 (1) | Se añade `BuscarUsuarioPorUid` (username/email a partir del uid de Firebase) y la propuesta de contrato REST §6 para que `chat-gateway` lo exponga. |
 | 2026-09-18 | Se retira el REST de este servicio (`RegistroController`/`RegistroApi`, CORS, Swagger): gRPC pasa a ser el único protocolo. `chat-gateway` es ahora el único punto de entrada REST del sistema y reenvía aquí. Se actualizan las referencias a `contratos-api.md` (eliminado). |
 | 2026-09-13 | Versión inicial: contrato gRPC de `RegistroGrpcService/Registrar`, espejo de `POST /api/v1/registro`. |

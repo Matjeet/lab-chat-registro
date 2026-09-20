@@ -122,22 +122,26 @@ servidor (`WARN`/`ERROR`), para no facilitar la enumeración de cuentas.
 ### Consulta por UID de Firebase
 
 `RegistroGrpcService/BuscarUsuarioPorUid` resuelve `username`/`email` a partir del UID que
-Firebase le asignó al usuario — pensado para que otro servicio (típicamente `chat-gateway`,
-tras validar el `idToken` del cliente) sepa a qué cuenta corresponde una sesión ya
-autenticada, sin conocer el esquema de la base de datos. `NOT_FOUND` si el UID no existe;
-`INVALID_ARGUMENT` si viene vacío. A diferencia del registro, esta respuesta **no** es
-genérica (no hay riesgo de enumeración: el UID es opaco y lo aporta quien ya lo posee, no
-algo que se pueda adivinar por username/email). Detalle completo, incluida una propuesta de
-contrato REST para `chat-gateway`, en
-[`docs/contrato-grpc-registro.md`](docs/contrato-grpc-registro.md) §2 y §6.
+Firebase le asignó al usuario — pensado para que `chat-gateway` sepa a qué cuenta corresponde
+una sesión ya autenticada, sin conocer el esquema de la base de datos. `NOT_FOUND` si el UID
+no existe; `INVALID_ARGUMENT` si viene vacío. A diferencia del registro, esta respuesta **no**
+es genérica (no hay riesgo de enumeración: el UID es opaco y lo aporta quien ya lo posee).
+
+**Este servicio no valida ningún token de identidad.** Quien llama a este rpc (siempre
+`chat-gateway`, nunca el cliente final) ya autenticó y autorizó la petición él mismo, con su
+propia integración con Firebase Admin SDK — es una decisión de arquitectura explícita:
+`chat-gateway` es el único punto del sistema que verifica tokens, para que microservicios
+futuros que necesiten autenticación no tengan que integrarse cada uno con Firebase. Detalle
+completo en [`docs/contrato-grpc-registro.md`](docs/contrato-grpc-registro.md) §1, §2 y §6.
 
 ### Abstracción del proveedor de identidad
 
 Toda la integración con Firebase vive en `com.arquetipo.demo.registro.identidad`, detrás de
 la interfaz `ProveedorIdentidad` (`crearUsuario` / `eliminarUsuario` / `buscarPorEmail` /
-`nombreProveedor`). `RegistroService` solo conoce esa interfaz: cambiar de proveedor de
-identidad (o añadir uno nuevo) es escribir una implementación nueva en un subpaquete
-(`identidad/firebase/` hoy), sin tocar la lógica de negocio del registro.
+`nombreProveedor`) — solo para el alta; verificar tokens de sesión es responsabilidad de
+`chat-gateway`, no de este servicio. `RegistroService` solo conoce esa interfaz: cambiar de
+proveedor de identidad (o añadir uno nuevo) es escribir una implementación nueva en un
+subpaquete (`identidad/firebase/` hoy), sin tocar la lógica de negocio del registro.
 
 ## Documentación de la API
 
@@ -285,7 +289,8 @@ service RegistroGrpcService {
   | Error inesperado | `INTERNAL` (mensaje genérico) |
 
   `BuscarUsuarioPorUid` usa `NOT_FOUND` (con mensaje directo, no genérico — ver
-  `docs/contrato-grpc-registro.md` §4) para "sin usuario con ese uid".
+  `docs/contrato-grpc-registro.md` §4) para "sin usuario con ese uid". No valida ningún
+  token: la autenticación la resuelve `chat-gateway` antes de llamar aquí.
 
 - Generación de stubs: plugin `com.google.protobuf` (`./gradlew generateProto`), se ejecuta
   automáticamente antes de compilar. **La cache de configuración de Gradle está desactivada**
