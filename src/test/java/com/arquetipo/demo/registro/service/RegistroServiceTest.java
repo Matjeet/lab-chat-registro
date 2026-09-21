@@ -10,6 +10,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.arquetipo.demo.common.exception.DuplicateResourceException;
+import com.arquetipo.demo.common.exception.UsuarioNoEncontradoException;
 import com.arquetipo.demo.registro.domain.ProveedorAuth;
 import com.arquetipo.demo.registro.domain.Usuario;
 import com.arquetipo.demo.registro.identidad.ProveedorIdentidad;
@@ -21,6 +22,7 @@ import com.arquetipo.demo.registro.repository.ProveedorAuthRepository;
 import com.arquetipo.demo.registro.repository.UsuarioRepository;
 import com.arquetipo.demo.registro.web.dto.RegistroRequest;
 import com.arquetipo.demo.registro.web.dto.RegistroResponse;
+import com.arquetipo.demo.registro.web.dto.UsuarioBasico;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -249,6 +251,28 @@ class RegistroServiceTest {
 		assertThatThrownBy(() -> service.registrar(request()))
 				.isInstanceOf(DuplicateResourceException.class)
 				.hasMessage(MENSAJE_GENERICO);
+	}
+
+	@Test
+	void buscarPorFirebaseUid_usuarioExiste_devuelveUsernameYEmail() {
+		Usuario usuario = new Usuario();
+		usuario.setUsername("mateo");
+		usuario.setEmail("mateo@example.com");
+		usuario.setFirebaseUid("uid-existente");
+		when(repository.findByFirebaseUid("uid-existente")).thenReturn(Optional.of(usuario));
+
+		UsuarioBasico resultado = service.buscarPorFirebaseUid("uid-existente");
+
+		assertThat(resultado.username()).isEqualTo("mateo");
+		assertThat(resultado.email()).isEqualTo("mateo@example.com");
+	}
+
+	@Test
+	void buscarPorFirebaseUid_sinUsuarioConEseUid_lanzaUsuarioNoEncontrado() {
+		when(repository.findByFirebaseUid("uid-inexistente")).thenReturn(Optional.empty());
+
+		assertThatThrownBy(() -> service.buscarPorFirebaseUid("uid-inexistente"))
+				.isInstanceOf(UsuarioNoEncontradoException.class);
 	}
 
 	@Test

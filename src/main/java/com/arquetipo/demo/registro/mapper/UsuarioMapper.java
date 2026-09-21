@@ -2,6 +2,7 @@ package com.arquetipo.demo.registro.mapper;
 
 import com.arquetipo.demo.registro.domain.Usuario;
 import com.arquetipo.demo.registro.web.dto.RegistroResponse;
+import com.arquetipo.demo.registro.web.dto.UsuarioBasico;
 import org.springframework.stereotype.Component;
 
 /**
@@ -19,5 +20,9 @@ public class UsuarioMapper {
 				usuario.getProveedor().getNombre(),
 				usuario.isActivo(),
 				usuario.getCreatedAt());
+	}
+
+	public UsuarioBasico toUsuarioBasico(Usuario usuario) {
+		return new UsuarioBasico(usuario.getUsername(), usuario.getEmail());
 	}
 }
