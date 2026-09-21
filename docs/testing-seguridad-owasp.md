@@ -11,7 +11,7 @@ Ejecución: `./gradlew test` (van incluidos en la suite normal).
 
 | OWASP | Estado | Clase de test | Qué comprueba |
 |---|---|---|---|
-| **A01 – Broken Access Control** | ✅ (para este flujo) | *(ver nota)* | El UID y el proveedor de la cuenta los determina el servidor (llama él mismo a Firebase Auth); el cliente no puede asignarse un UID ni un proveedor arbitrarios porque ninguno de los dos es un campo de la petición. Se cubre indirectamente: A05 verifica que Actuator no expone endpoints administrativos. Ver nota sobre el alcance. |
+| **A01 – Broken Access Control** | ✅ (para este flujo) | *(ver nota)* | El UID y el proveedor de la cuenta los determina el servidor (llama él mismo a Firebase Auth); el cliente no puede asignarse un UID ni un proveedor arbitrarios porque ninguno de los dos es un campo de la petición. `BuscarUsuarioPorUid` **no** implementa control de acceso propio a propósito — ver nota sobre el alcance. |
 | **A02 – Cryptographic Failures** | ✅ | `A02CryptographicFailuresTest` | La contraseña en claro se reenvía al proveedor de identidad pero **nunca se persiste** (la entidad `Usuario` no tiene ningún campo de credenciales), **nunca se devuelve** en la respuesta, y **nunca aparece en el log del servidor**, ni siquiera cuando la petición se rechaza. |
 | **A03 – Injection** | ✅ | `A03InjectionTest` | Payloads SQLi / scripting en `username` y `email` se rechazan en validación (`INVALID_ARGUMENT`) o nunca provocan un fallo interno (`INTERNAL`/`UNKNOWN`); las consultas del repositorio están parametrizadas (un valor con sintaxis SQL se trata como literal); la tabla sigue operativa tras los intentos. |
 | **A04 – Insecure Design** | ✅ | `A04AccountEnumerationTest` | Resistencia a **enumeración de cuentas**: un conflicto de `username`, de `email`, o un usuario que ya existe tanto en el proveedor de identidad como en la base local, devuelven un `Status` gRPC idéntico (mismo código `ALREADY_EXISTS`, misma `description`); la respuesta no incluye el campo que colisionó ni el valor enviado. |
@@ -24,11 +24,19 @@ Ejecución: `./gradlew test` (van incluidos en la suite normal).
 
 ## Notas
 
-- **A01 — alcance de este veredicto:** el UID y el proveedor no se pueden falsificar porque no
-  son campos de `RegistroRequest` (el servidor los obtiene el mismo al llamar a Firebase). Esto
-  **no** sustituye a control de acceso en endpoints futuros que requieran demostrar identidad
-  (p. ej. "editar mi propio perfil"): esos necesitarán verificar `Authorization: Bearer
-  <idToken>` con Firebase Admin SDK, y ahí es donde irán los tests de acceso propiamente dichos.
+- **A01 — alcance de este veredicto, y por qué `BuscarUsuarioPorUid` no valida nada:** el UID y
+  el proveedor no se pueden falsificar en el alta porque no son campos de `RegistroRequest` (el
+  servidor los obtiene él mismo al llamar a Firebase). `BuscarUsuarioPorUid` es una consulta que
+  sí necesita demostrar identidad (que quien pregunta por un uid sea su dueño) — pero esa
+  decisión de arquitectura es explícita: **`chat-gateway` es el único punto del sistema que
+  valida tokens de identidad** (integración propia con Firebase Admin SDK, ver
+  `chat-gateway/docs/arquitectura-gateway.md`), para que microservicios futuros que necesiten
+  autenticación no tengan que integrarse cada uno con Firebase (o con el proveedor que sea). Por
+  eso `chat-registro` recibe aquí un `uid` ya autenticado y autorizado, sin ningún token que
+  verificar — el test de control de acceso de este flujo (`AutenticacionExtractorTest` +
+  `UsuarioControllerTest`) vive en `chat-gateway`, no aquí. Si un endpoint de `chat-registro`
+  necesitara en el futuro su propio control de acceso (no delegado en el gateway), ahí sí
+  correspondería un test A01 en esta suite.
 - **A02/A07 — quién valida qué:** este servicio impone su propia política de contraseña en el
   borde (evita reenviar al proveedor una contraseña ya sabida débil), pero Firebase aplica la
   suya también al crear la cuenta; ambas capas son independientes y pueden divergir con el

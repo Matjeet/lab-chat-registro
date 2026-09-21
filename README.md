@@ -119,13 +119,29 @@ servidor (`WARN`/`ERROR`), para no facilitar la enumeración de cuentas.
    (borra) el usuario recién creado en Firebase, para no dejarlo huérfano. En la rama de
    reconciliación nunca se borra: ese usuario ya existía en Firebase antes de esta petición.
 
+### Consulta por UID de Firebase
+
+`RegistroGrpcService/BuscarUsuarioPorUid` resuelve `username`/`email` a partir del UID que
+Firebase le asignó al usuario — pensado para que `chat-gateway` sepa a qué cuenta corresponde
+una sesión ya autenticada, sin conocer el esquema de la base de datos. `NOT_FOUND` si el UID
+no existe; `INVALID_ARGUMENT` si viene vacío. A diferencia del registro, esta respuesta **no**
+es genérica (no hay riesgo de enumeración: el UID es opaco y lo aporta quien ya lo posee).
+
+**Este servicio no valida ningún token de identidad.** Quien llama a este rpc (siempre
+`chat-gateway`, nunca el cliente final) ya autenticó y autorizó la petición él mismo, con su
+propia integración con Firebase Admin SDK — es una decisión de arquitectura explícita:
+`chat-gateway` es el único punto del sistema que verifica tokens, para que microservicios
+futuros que necesiten autenticación no tengan que integrarse cada uno con Firebase. Detalle
+completo en [`docs/contrato-grpc-registro.md`](docs/contrato-grpc-registro.md) §1, §2 y §6.
+
 ### Abstracción del proveedor de identidad
 
 Toda la integración con Firebase vive en `com.arquetipo.demo.registro.identidad`, detrás de
 la interfaz `ProveedorIdentidad` (`crearUsuario` / `eliminarUsuario` / `buscarPorEmail` /
-`nombreProveedor`). `RegistroService` solo conoce esa interfaz: cambiar de proveedor de
-identidad (o añadir uno nuevo) es escribir una implementación nueva en un subpaquete
-(`identidad/firebase/` hoy), sin tocar la lógica de negocio del registro.
+`nombreProveedor`) — solo para el alta; verificar tokens de sesión es responsabilidad de
+`chat-gateway`, no de este servicio. `RegistroService` solo conoce esa interfaz: cambiar de
+proveedor de identidad (o añadir uno nuevo) es escribir una implementación nueva en un
+subpaquete (`identidad/firebase/` hoy), sin tocar la lógica de negocio del registro.
 
 ## Documentación de la API
 
@@ -142,6 +158,7 @@ com.arquetipo.demo
 │   ├── config/JpaAuditingConfig.java        auditoría (createdAt/updatedAt)
 │   ├── env/DotenvEnvironmentPostProcessor.java  carga .env (Gradle, IDE o jar — ver META-INF/spring.factories)
 │   ├── exception/DuplicateResourceException  → ALREADY_EXISTS en el controller gRPC
+│   ├── exception/UsuarioNoEncontradoException → NOT_FOUND en el controller gRPC
 │   └── grpc/                                servidor gRPC embebido
 │       ├── GrpcServerProperties.java            binding de `grpc.server.*` (puerto, enabled)
 │       ├── GrpcServerConfig.java                registra el servidor si grpc.server.enabled=true
@@ -160,10 +177,10 @@ com.arquetipo.demo
     │   └── firebase/
     │       ├── FirebaseAppConfig.java           inicializa el SDK (FirebaseApp/FirebaseAuth)
     │       └── FirebaseProveedorIdentidad.java  implementacion sobre Firebase Admin SDK
-    ├── service/RegistroService.java         orquesta: unicidad local + proveedor + persistencia + compensacion
-    ├── web/dto/RegistroRequest.java · RegistroResponse.java   contrato compartido (validado y usado por grpc/)
+    ├── service/RegistroService.java         orquesta el alta; buscarPorFirebaseUid() para la consulta
+    ├── web/dto/RegistroRequest.java · RegistroResponse.java · UsuarioBasico.java   contrato compartido (validado y usado por grpc/)
     └── grpc/                                unico protocolo expuesto (ver *Protocolo gRPC*)
-        ├── RegistroGrpcController.java          rpc Registrar (valida + delega en RegistroService)
+        ├── RegistroGrpcController.java          rpc Registrar + BuscarUsuarioPorUid (valida + delega en RegistroService)
         └── RegistroGrpcMapper.java              traduce entre los DTO y los mensajes de registro.proto
 
 src/main/proto/registro.proto             contrato gRPC (servicio + mensajes), genera los stubs en build/generated
@@ -243,6 +260,7 @@ contrato vive en [`src/main/proto/registro.proto`](src/main/proto/registro.proto
 ```proto
 service RegistroGrpcService {
   rpc Registrar (RegistrarUsuarioRequest) returns (RegistrarUsuarioResponse);
+  rpc BuscarUsuarioPorUid (BuscarUsuarioPorUidRequest) returns (BuscarUsuarioPorUidResponse);
 }
 ```
 
@@ -259,13 +277,20 @@ service RegistroGrpcService {
 - **Validación**: como gRPC no pasa por Spring MVC, `RegistroGrpcController` valida a mano el
   `RegistroRequest` con el mismo `Validator` de Bean Validation que usa el resto del flujo —
   no hay una capa REST/OpenAPI aparte que repita las reglas.
-- **Errores** (mismo principio de mensaje genérico al cliente / detalle real solo en el log):
+- **`BuscarUsuarioPorUid`**: resuelve `username`/`email` a partir del UID de Firebase — ver
+  *Consulta por UID de Firebase* más arriba.
+- **Errores de `Registrar`** (mismo principio de mensaje genérico al cliente / detalle real
+  solo en el log):
 
   | Situación | Código gRPC |
   |---|---|
   | Validación fallida | `INVALID_ARGUMENT` |
   | Username/email duplicado, o ya existente en el proveedor | `ALREADY_EXISTS` (mensaje genérico) |
   | Error inesperado | `INTERNAL` (mensaje genérico) |
+
+  `BuscarUsuarioPorUid` usa `NOT_FOUND` (con mensaje directo, no genérico — ver
+  `docs/contrato-grpc-registro.md` §4) para "sin usuario con ese uid". No valida ningún
+  token: la autenticación la resuelve `chat-gateway` antes de llamar aquí.
 
 - Generación de stubs: plugin `com.google.protobuf` (`./gradlew generateProto`), se ejecuta
   automáticamente antes de compilar. **La cache de configuración de Gradle está desactivada**
@@ -296,6 +321,7 @@ cliente, detalle real en el log") en
 | Excepción de dominio | Código gRPC |
 |-----------|------|
 | `DuplicateResourceException` | `ALREADY_EXISTS` |
+| `UsuarioNoEncontradoException` (solo en `BuscarUsuarioPorUid`) | `NOT_FOUND` |
 | Bean Validation | `INVALID_ARGUMENT` |
 | `DataIntegrityViolationException` (traducida a `DuplicateResourceException` en `RegistroService`) | `ALREADY_EXISTS` |
 | `ProveedorIdentidadException` (fallo de Firebase que no es "ya existe") | `INTERNAL` (mensaje genérico; el detalle real solo en logs) |
