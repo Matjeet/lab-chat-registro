@@ -276,6 +276,28 @@ class RegistroServiceTest {
 	}
 
 	@Test
+	void existeUsername_usernameRegistrado_devuelveTrue() {
+		when(repository.existsByUsernameIgnoreCase("mateo")).thenReturn(true);
+
+		assertThat(service.existeUsername("mateo")).isTrue();
+	}
+
+	@Test
+	void existeUsername_usernameLibre_devuelveFalse() {
+		when(repository.existsByUsernameIgnoreCase("libre")).thenReturn(false);
+
+		assertThat(service.existeUsername("libre")).isFalse();
+	}
+
+	@Test
+	void existeUsername_recortaEspacios_antesDeConsultar() {
+		when(repository.existsByUsernameIgnoreCase("mateo")).thenReturn(true);
+
+		assertThat(service.existeUsername("  mateo  ")).isTrue();
+		verify(repository).existsByUsernameIgnoreCase("mateo");
+	}
+
+	@Test
 	void registrar_proveedorNoSembradoEnBD_esErrorInternoNoConflicto() {
 		when(repository.existsByUsernameIgnoreCase("mateo")).thenReturn(false);
 		when(repository.existsByEmailIgnoreCase("mateo@example.com")).thenReturn(false);

@@ -134,6 +134,16 @@ propia integración con Firebase Admin SDK — es una decisión de arquitectura 
 futuros que necesiten autenticación no tengan que integrarse cada uno con Firebase. Detalle
 completo en [`docs/contrato-grpc-registro.md`](docs/contrato-grpc-registro.md) §1, §2 y §6.
 
+### Disponibilidad de un username
+
+`RegistroGrpcService/ExisteUsername` responde solo `true`/`false`: si un `username` ya está
+en uso (sin distinguir mayúsculas), reutilizando la misma comprobación que hace `Registrar`
+para su unicidad local. Pensado para validación en vivo mientras se escribe (mismo caso de
+uso que `chat-frontend/src/utils/validacionRegistro.js` ya resuelve del lado del cliente). A
+diferencia de los otros dos rpc, esta consulta es **deliberadamente pública**: no requiere
+sesión ni token — no expone ningún dato del perfil, solo disponibilidad. `INVALID_ARGUMENT`
+si `username` viene vacío.
+
 ### Abstracción del proveedor de identidad
 
 Toda la integración con Firebase vive en `com.arquetipo.demo.registro.identidad`, detrás de
@@ -177,10 +187,10 @@ com.arquetipo.demo
     │   └── firebase/
     │       ├── FirebaseAppConfig.java           inicializa el SDK (FirebaseApp/FirebaseAuth)
     │       └── FirebaseProveedorIdentidad.java  implementacion sobre Firebase Admin SDK
-    ├── service/RegistroService.java         orquesta el alta; buscarPorFirebaseUid() para la consulta
+    ├── service/RegistroService.java         orquesta el alta; buscarPorFirebaseUid()/existeUsername() para las consultas
     ├── web/dto/RegistroRequest.java · RegistroResponse.java · UsuarioBasico.java   contrato compartido (validado y usado por grpc/)
     └── grpc/                                unico protocolo expuesto (ver *Protocolo gRPC*)
-        ├── RegistroGrpcController.java          rpc Registrar + BuscarUsuarioPorUid (valida + delega en RegistroService)
+        ├── RegistroGrpcController.java          rpc Registrar + BuscarUsuarioPorUid + ExisteUsername (valida + delega en RegistroService)
         └── RegistroGrpcMapper.java              traduce entre los DTO y los mensajes de registro.proto
 
 src/main/proto/registro.proto             contrato gRPC (servicio + mensajes), genera los stubs en build/generated
@@ -261,6 +271,7 @@ contrato vive en [`src/main/proto/registro.proto`](src/main/proto/registro.proto
 service RegistroGrpcService {
   rpc Registrar (RegistrarUsuarioRequest) returns (RegistrarUsuarioResponse);
   rpc BuscarUsuarioPorUid (BuscarUsuarioPorUidRequest) returns (BuscarUsuarioPorUidResponse);
+  rpc ExisteUsername (ExisteUsernameRequest) returns (ExisteUsernameResponse);
 }
 ```
 
@@ -279,6 +290,9 @@ service RegistroGrpcService {
   no hay una capa REST/OpenAPI aparte que repita las reglas.
 - **`BuscarUsuarioPorUid`**: resuelve `username`/`email` a partir del UID de Firebase — ver
   *Consulta por UID de Firebase* más arriba.
+- **`ExisteUsername`**: `true`/`false` sobre si un username ya está en uso — ver
+  *Disponibilidad de un username* más arriba. Es el único rpc pensado para ser público (sin
+  sesión ni token detrás).
 - **Errores de `Registrar`** (mismo principio de mensaje genérico al cliente / detalle real
   solo en el log):
 
@@ -290,7 +304,9 @@ service RegistroGrpcService {
 
   `BuscarUsuarioPorUid` usa `NOT_FOUND` (con mensaje directo, no genérico — ver
   `docs/contrato-grpc-registro.md` §4) para "sin usuario con ese uid". No valida ningún
-  token: la autenticación la resuelve `chat-gateway` antes de llamar aquí.
+  token: la autenticación la resuelve `chat-gateway` antes de llamar aquí. `ExisteUsername`
+  solo tiene `INVALID_ARGUMENT` (username vacío) e `INTERNAL` — sin `NOT_FOUND`, la respuesta
+  es siempre un booleano.
 
 - Generación de stubs: plugin `com.google.protobuf` (`./gradlew generateProto`), se ejecuta
   automáticamente antes de compilar. **La cache de configuración de Gradle está desactivada**
