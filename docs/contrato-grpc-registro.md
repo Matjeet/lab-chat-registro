@@ -24,9 +24,9 @@ La fuente de verdad ejecutable es el propio `.proto`:
 | Variable de entorno del servidor | `GRPC_SERVER_PORT` (por defecto `9090`); `GRPC_SERVER_ENABLED=false` apaga el servidor por completo |
 | Paquete proto | `com.arquetipo.demo.registro.grpc` |
 | Servicio | `RegistroGrpcService` |
-| Métodos (rpc) | `Registrar(RegistrarUsuarioRequest) returns (RegistrarUsuarioResponse)` · `BuscarUsuarioPorUid(BuscarUsuarioPorUidRequest) returns (BuscarUsuarioPorUidResponse)` — ambos unarios, sin streaming |
+| Métodos (rpc) | `Registrar(RegistrarUsuarioRequest) returns (RegistrarUsuarioResponse)` · `BuscarUsuarioPorUid(BuscarUsuarioPorUidRequest) returns (BuscarUsuarioPorUidResponse)` · `ExisteUsername(ExisteUsernameRequest) returns (ExisteUsernameResponse)` — los tres unarios, sin streaming |
 | Reflexión de servicio | Habilitada (`io.grpc:grpc-services`) — un cliente puede descubrir el contrato sin tener el `.proto`, ver §7 |
-| Autenticación | Ninguna en ninguno de los dos rpc. **Este servicio no valida tokens de identidad**: `chat-gateway` es el único punto del sistema con integración con Firebase para verificar tokens (`Authorization: Bearer <idToken>`) — a `chat-registro` solo le llega, ya autenticado y autorizado, el dato que necesita (p. ej. el `uid` en `BuscarUsuarioPorUid`). Pensado para tráfico interno exclusivamente; nunca se expone directamente a internet. |
+| Autenticación | Ninguna en ninguno de los tres rpc. **Este servicio no valida tokens de identidad**: `chat-gateway` es el único punto del sistema con integración con Firebase para verificar tokens (`Authorization: Bearer <idToken>`) — a `chat-registro` solo le llega, ya autenticado y autorizado, el dato que necesita (p. ej. el `uid` en `BuscarUsuarioPorUid`). `ExisteUsername` ni siquiera necesita eso: es una consulta pública de disponibilidad, ver §2. Pensado para tráfico interno exclusivamente; nunca se expone directamente a internet. |
 
 > El puerto real por entorno lo define infraestructura; en producción probablemente vaya
 > detrás de una red interna o un proxy con TLS. Pregunta al equipo de infraestructura la
@@ -51,6 +51,7 @@ option java_outer_classname = "RegistroProto";
 service RegistroGrpcService {
   rpc Registrar (RegistrarUsuarioRequest) returns (RegistrarUsuarioResponse);
   rpc BuscarUsuarioPorUid (BuscarUsuarioPorUidRequest) returns (BuscarUsuarioPorUidResponse);
+  rpc ExisteUsername (ExisteUsernameRequest) returns (ExisteUsernameResponse);
 }
 
 message RegistrarUsuarioRequest {
@@ -75,6 +76,14 @@ message BuscarUsuarioPorUidRequest {
 message BuscarUsuarioPorUidResponse {
   string username = 1;
   string email = 2;
+}
+
+message ExisteUsernameRequest {
+  string username = 1;
+}
+
+message ExisteUsernameResponse {
+  bool existe = 1;
 }
 ```
 
@@ -118,6 +127,23 @@ de llamar aquí**. `chat-registro` no repite esa verificación: confía en el `u
 
 > No expone nada más del perfil (ni `id`, ni `proveedor`, ni `createdAt`) — si en el futuro
 > hace falta más, se amplía este mensaje, no se reutiliza `RegistrarUsuarioResponse`.
+
+### `ExisteUsernameRequest` / `ExisteUsernameResponse`
+
+Dice si un `username` ya está en uso (sin distinguir mayúsculas) — pensado para validación en
+vivo mientras se escribe (p. ej. un formulario de registro, como ya hace
+`chat-frontend/src/utils/validacionRegistro.js` del lado del cliente). A diferencia de
+`BuscarUsuarioPorUid`, esta consulta es **intencionalmente pública**: no expone ningún dato
+del perfil, solo un booleano de disponibilidad, así que no necesita venir de una sesión
+autenticada.
+
+| Campo | Mensaje | Tipo proto | Obligatorio | Descripción |
+|---|---|---|---|---|
+| `username` | `ExisteUsernameRequest` | `string` | sí | El username a comprobar. Vacío → `INVALID_ARGUMENT`. Se recorta con `trim()` antes de consultar. |
+| `existe` | `ExisteUsernameResponse` | `bool` | — | `true` si ya hay un usuario con ese `username` (sin distinguir mayúsculas). |
+
+> No hay caso "no encontrado": la respuesta es siempre un booleano, nunca un error por username
+> libre.
 
 ---
 
@@ -187,6 +213,26 @@ BuscarUsuarioPorUidResponse respuesta = stub.buscarUsuarioPorUid(
         BuscarUsuarioPorUidRequest.newBuilder().setUid(uid).build());
 ```
 
+### `ExisteUsername`
+
+```bash
+grpcurl -plaintext -d '{"username": "mateo"}' \
+  localhost:9090 com.arquetipo.demo.registro.grpc.RegistroGrpcService/ExisteUsername
+```
+
+Respuesta:
+
+```json
+{
+  "existe": true
+}
+```
+
+```java
+ExisteUsernameResponse respuesta = stub.existeUsername(
+        ExisteUsernameRequest.newBuilder().setUsername(username).build());
+```
+
 ---
 
 ## 4. Errores
@@ -233,12 +279,24 @@ situación tal cual.
 > esa responsabilidad es enteramente de `chat-gateway`, que valida el `idToken` con su propia
 > integración con Firebase **antes** de llamar aquí — ver §6.
 
-Si accedes a cualquiera de los dos rpc a través de `chat-gateway` (REST), es su propia
+### `ExisteUsername`
+
+| Situación | Código gRPC | `description` |
+|---|---|---|
+| `username` vacío | `INVALID_ARGUMENT` | `"username es obligatorio"` |
+| Cualquier otro fallo (base de datos, bug interno) | `INTERNAL` | Mensaje genérico fijo: `"Ocurrio un error inesperado. Contacte con soporte."` |
+
+No tiene `NOT_FOUND`: username libre y username no-vacío-pero-inválido-por-formato son casos
+distintos que este rpc no diferencia — solo comprueba existencia, no valida el formato del
+`username` (eso lo sigue haciendo `Registrar` con Bean Validation al crear la cuenta de
+verdad).
+
+Si accedes a cualquiera de los rpc a través de `chat-gateway` (REST), es su propia
 documentación la que dice cómo traduce los códigos de arriba a HTTP, y cómo maneja además la
-autenticación que este servicio no ve — ver §6.
+autenticación que este servicio no ve (para `BuscarUsuarioPorUid`) — ver §6.
 
 **Un fallo de conexión** (servidor caído, puerto equivocado) llega como `UNAVAILABLE` en
-cualquiera de los dos rpc — no está en las tablas porque no lo genera este servicio, es
+cualquiera de los tres rpc — no está en las tablas porque no lo genera este servicio, es
 infraestructura de gRPC.
 
 ---
@@ -255,6 +313,9 @@ infraestructura de gRPC.
   única consulta de solo lectura (`UsuarioRepository.findByFirebaseUid`) — no hay
   orquestación, compensación, ni verificación de identidad que explicar aquí: eso lo resuelve
   `chat-gateway` antes de llamar a este rpc (ver §6).
+- `ExisteUsername` delega en `RegistroService.existeUsername(username)`, que reutiliza la
+  misma consulta (`UsuarioRepository.existsByUsernameIgnoreCase`) que ya usa `Registrar` para
+  su comprobación local de unicidad — no hay lógica nueva, solo se expone por su cuenta.
 
 ---
 
@@ -262,7 +323,9 @@ infraestructura de gRPC.
 
 `chat-registro` no expone REST — `chat-gateway` es quien implementa esto como fachada REST de
 `BuscarUsuarioPorUid`, siguiendo el mismo criterio que ya usa para `POST /api/v1/registro`
-(Problem Details RFC 9457, ver la documentación propia de `chat-gateway`).
+(Problem Details RFC 9457, ver la documentación propia de `chat-gateway`). **`ExisteUsername`
+todavía no tiene fachada REST** — si `chat-gateway`/`chat-frontend` la necesitan, es un
+contrato nuevo a definir, no está cubierto por lo de abajo.
 
 | | |
 |---|---|
@@ -322,6 +385,7 @@ pueden listar servicios y construir la petición sin el archivo, apuntando solo 
 
 | Fecha | Cambio |
 |---|---|
+| 2026-09-22 | Se añade `ExisteUsername` (booleano de disponibilidad de un `username`, sin autenticación — consulta pública, a diferencia de `BuscarUsuarioPorUid`). |
 | 2026-09-20 | Se revierte el cambio del 2026-09-19 (2): `BuscarUsuarioPorUid` vuelve a no llevar `id_token` ni verificar nada — decisión de arquitectura explícita: **`chat-gateway` es el único punto del sistema que valida tokens de identidad** (con su propia integración con Firebase Admin SDK), para que futuros microservicios que necesiten autenticación no tengan que integrarse cada uno con Firebase. `chat-registro` conserva Firebase únicamente para crear/eliminar/buscar cuentas en el alta. Se quitan `TokenIdentidadInvalidoException`/`AccesoNoAutorizadoException` y el test `A01BrokenAccessControlTest` (esa propiedad de seguridad ahora se prueba en `chat-gateway`). |
 | 2026-09-19 (2) | *(revertido el 2026-09-20)* `BuscarUsuarioPorUid` pasó a exigir y verificar `id_token` él mismo. |
 | 2026-09-19 (1) | Se añade `BuscarUsuarioPorUid` (username/email a partir del uid de Firebase) y la propuesta de contrato REST §6 para que `chat-gateway` lo exponga. |

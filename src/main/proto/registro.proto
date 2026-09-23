@@ -17,6 +17,12 @@ service RegistroGrpcService {
   // que el uid que recibe ya fue verificado. NOT_FOUND si el uid no corresponde a ningun
   // usuario registrado.
   rpc BuscarUsuarioPorUid (BuscarUsuarioPorUidRequest) returns (BuscarUsuarioPorUidResponse);
+
+  // Solo dice si un username ya esta en uso (sin distinguir mayusculas), pensado para
+  // validacion en vivo mientras se escribe (p. ej. un formulario de registro). No revela
+  // nada mas del usuario -- a diferencia de Registrar, esto es intencionalmente una consulta
+  // de disponibilidad, no un dato protegido contra enumeracion.
+  rpc ExisteUsername (ExisteUsernameRequest) returns (ExisteUsernameResponse);
 }
 
 // Mismos campos y las mismas reglas que RegistroRequest (web/dto/RegistroRequest.java):
@@ -53,4 +59,12 @@ message BuscarUsuarioPorUidRequest {
 message BuscarUsuarioPorUidResponse {
   string username = 1;
   string email = 2;
+}
+
+message ExisteUsernameRequest {
+  string username = 1;
+}
+
+message ExisteUsernameResponse {
+  bool existe = 1;
 }

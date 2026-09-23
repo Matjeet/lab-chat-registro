@@ -24,9 +24,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * Prueba los dos rpc de {@link RegistroGrpcController} sobre un servidor in-process (sin red
- * real): {@code Registrar} (exito, validacion invalida, usuario duplicado) y
- * {@code BuscarUsuarioPorUid} (encontrado, no encontrado, uid vacio).
+ * Prueba los tres rpc de {@link RegistroGrpcController} sobre un servidor in-process (sin red
+ * real): {@code Registrar} (exito, validacion invalida, usuario duplicado),
+ * {@code BuscarUsuarioPorUid} (encontrado, no encontrado, uid vacio) y
+ * {@code ExisteUsername} (existe, no existe, username vacio).
  */
 class RegistroGrpcControllerTest {
 
@@ -136,6 +137,35 @@ class RegistroGrpcControllerTest {
 
 		assertThat(excepcion.getStatus().getCode()).isEqualTo(io.grpc.Status.Code.INVALID_ARGUMENT);
 		org.mockito.Mockito.verify(registroService, org.mockito.Mockito.never()).buscarPorFirebaseUid(any());
+	}
+
+	@Test
+	void existeUsername_usernameRegistrado_devuelveTrue() {
+		when(registroService.existeUsername("mateo")).thenReturn(true);
+
+		ExisteUsernameResponse respuesta = stub.existeUsername(
+				ExisteUsernameRequest.newBuilder().setUsername("mateo").build());
+
+		assertThat(respuesta.getExiste()).isTrue();
+	}
+
+	@Test
+	void existeUsername_usernameLibre_devuelveFalse() {
+		when(registroService.existeUsername("libre")).thenReturn(false);
+
+		ExisteUsernameResponse respuesta = stub.existeUsername(
+				ExisteUsernameRequest.newBuilder().setUsername("libre").build());
+
+		assertThat(respuesta.getExiste()).isFalse();
+	}
+
+	@Test
+	void existeUsername_usernameVacio_devuelveInvalidArgumentSinLlamarAlServicio() {
+		StatusRuntimeException excepcion = catchStatusRuntimeException(() -> stub.existeUsername(
+				ExisteUsernameRequest.newBuilder().setUsername("").build()));
+
+		assertThat(excepcion.getStatus().getCode()).isEqualTo(io.grpc.Status.Code.INVALID_ARGUMENT);
+		org.mockito.Mockito.verify(registroService, org.mockito.Mockito.never()).existeUsername(any());
 	}
 
 	private static StatusRuntimeException catchStatusRuntimeException(Runnable llamada) {
