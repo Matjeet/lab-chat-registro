@@ -21,9 +21,10 @@ import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Orquesta el alta de usuarios: crea la identidad en el proveedor externo (Firebase Auth,
- * via {@link ProveedorIdentidad}) y persiste el perfil de dominio. Tambien resuelve la
- * consulta inversa: dado un UID de Firebase, a que username/email corresponde
- * ({@link #buscarPorFirebaseUid(String)}).
+ * via {@link ProveedorIdentidad}) y persiste el perfil de dominio. Tambien resuelve dos
+ * consultas de solo lectura: dado un UID de Firebase, a que username/email corresponde
+ * ({@link #buscarPorFirebaseUid(String)}); y si un username ya esta en uso
+ * ({@link #existeUsername(String)}).
  *
  * <p>Orden de las operaciones y compensaciones del alta:
  * <ol>
@@ -125,6 +126,21 @@ public class RegistroService {
 				});
 		log.debug("<< buscarPorFirebaseUid() -> OK, username='{}'", resultado.username());
 		return resultado;
+	}
+
+	/**
+	 * Si un {@code username} ya esta en uso (sin distinguir mayusculas). Pensado para
+	 * validacion en vivo (p. ej. mientras se escribe en un formulario de registro); a
+	 * diferencia del resto del alta, esta consulta es intencionalmente publica: decir si un
+	 * username esta libre no expone nada sensible.
+	 */
+	@Transactional(readOnly = true)
+	public boolean existeUsername(String username) {
+		String normalizado = username.trim();
+		log.debug(">> existeUsername(username='{}')", normalizado);
+		boolean existe = repository.existsByUsernameIgnoreCase(normalizado);
+		log.debug("<< existeUsername() -> OK, existe={}", existe);
+		return existe;
 	}
 
 	/**

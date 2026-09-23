@@ -18,11 +18,12 @@ import org.springframework.stereotype.Component;
 
 /**
  * Punto de entrada del registro y consulta de usuarios: {@code registrar} recibe {@code
- * username}/{@code email}/{@code password} y {@code buscarUsuarioPorUid} resuelve
- * username/email a partir del UID de Firebase de una sesion ya autenticada. En los dos casos
- * delega en {@link RegistroService} (unica logica de negocio, sin duplicarla aqui). Es el
- * unico protocolo que expone este servicio — el REST del sistema lo sirve {@code
- * chat-gateway}, que reenvia aqui por gRPC (ver {@code docs/contrato-grpc-registro.md}).
+ * username}/{@code email}/{@code password}; {@code buscarUsuarioPorUid} resuelve
+ * username/email a partir del UID de Firebase de una sesion ya autenticada; {@code
+ * existeUsername} dice si un username ya esta en uso. En los tres casos delega en
+ * {@link RegistroService} (unica logica de negocio, sin duplicarla aqui). Es el unico
+ * protocolo que expone este servicio — el REST del sistema lo sirve {@code chat-gateway}, que
+ * reenvia aqui por gRPC (ver {@code docs/contrato-grpc-registro.md}).
  *
  * <p>Al no pasar por Spring MVC no hay {@code @Valid} automatico: la validacion de Bean
  * Validation se aplica aqui a mano con el mismo {@link Validator} sobre el mismo
@@ -49,6 +50,11 @@ import org.springframework.stereotype.Component;
  * {@code docs/contrato-grpc-registro.md} §1. Aqui el mensaje de {@code NOT_FOUND} no necesita
  * ser generico: no es un alta con riesgo de enumeracion de cuentas por username/email, es una
  * consulta puntual por un UID opaco.
+ *
+ * <p>{@code existeUsername}: {@code username} vacio -&gt; {@code INVALID_ARGUMENT}; cualquier
+ * otra excepcion -&gt; {@code INTERNAL}. No hay caso "no encontrado": la respuesta es siempre
+ * un booleano. A diferencia de los otros dos rpc, esto es deliberadamente una consulta
+ * publica de disponibilidad (piensa "¿este username esta libre?"), no un dato a proteger.
  */
 @Slf4j
 @Component
@@ -118,6 +124,30 @@ public class RegistroGrpcController extends RegistroGrpcServiceGrpc.RegistroGrpc
 		} catch (Exception ex) {
 			log.error("Excepcion no controlada al buscar el usuario por uid", ex);
 			log.debug("<< buscarUsuarioPorUid() -> INTERNAL");
+			responseObserver.onError(Status.INTERNAL.withDescription(DETALLE_ERROR_INTERNO).asRuntimeException());
+		}
+	}
+
+	@Override
+	public void existeUsername(ExisteUsernameRequest grpcRequest,
+			StreamObserver<ExisteUsernameResponse> responseObserver) {
+		log.debug(">> existeUsername(username='{}')", grpcRequest.getUsername());
+
+		if (grpcRequest.getUsername().isBlank()) {
+			log.debug("<< existeUsername() -> INVALID_ARGUMENT (username vacio)");
+			responseObserver.onError(
+					Status.INVALID_ARGUMENT.withDescription("username es obligatorio").asRuntimeException());
+			return;
+		}
+
+		try {
+			boolean existe = service.existeUsername(grpcRequest.getUsername());
+			responseObserver.onNext(ExisteUsernameResponse.newBuilder().setExiste(existe).build());
+			responseObserver.onCompleted();
+			log.debug("<< existeUsername() -> OK, existe={}", existe);
+		} catch (Exception ex) {
+			log.error("Excepcion no controlada al verificar existencia de username", ex);
+			log.debug("<< existeUsername() -> INTERNAL");
 			responseObserver.onError(Status.INTERNAL.withDescription(DETALLE_ERROR_INTERNO).asRuntimeException());
 		}
 	}

@@ -14,7 +14,7 @@ Ejecución: `./gradlew test` (van incluidos en la suite normal).
 | **A01 – Broken Access Control** | ✅ (para este flujo) | *(ver nota)* | El UID y el proveedor de la cuenta los determina el servidor (llama él mismo a Firebase Auth); el cliente no puede asignarse un UID ni un proveedor arbitrarios porque ninguno de los dos es un campo de la petición. `BuscarUsuarioPorUid` **no** implementa control de acceso propio a propósito — ver nota sobre el alcance. |
 | **A02 – Cryptographic Failures** | ✅ | `A02CryptographicFailuresTest` | La contraseña en claro se reenvía al proveedor de identidad pero **nunca se persiste** (la entidad `Usuario` no tiene ningún campo de credenciales), **nunca se devuelve** en la respuesta, y **nunca aparece en el log del servidor**, ni siquiera cuando la petición se rechaza. |
 | **A03 – Injection** | ✅ | `A03InjectionTest` | Payloads SQLi / scripting en `username` y `email` se rechazan en validación (`INVALID_ARGUMENT`) o nunca provocan un fallo interno (`INTERNAL`/`UNKNOWN`); las consultas del repositorio están parametrizadas (un valor con sintaxis SQL se trata como literal); la tabla sigue operativa tras los intentos. |
-| **A04 – Insecure Design** | ✅ | `A04AccountEnumerationTest` | Resistencia a **enumeración de cuentas**: un conflicto de `username`, de `email`, o un usuario que ya existe tanto en el proveedor de identidad como en la base local, devuelven un `Status` gRPC idéntico (mismo código `ALREADY_EXISTS`, misma `description`); la respuesta no incluye el campo que colisionó ni el valor enviado. |
+| **A04 – Insecure Design** | ✅ (para `Registrar`) | `A04AccountEnumerationTest` | Resistencia a **enumeración de cuentas** en el alta: un conflicto de `username`, de `email`, o un usuario que ya existe tanto en el proveedor de identidad como en la base local, devuelven un `Status` gRPC idéntico (mismo código `ALREADY_EXISTS`, misma `description`); la respuesta no incluye el campo que colisionó ni el valor enviado. `ExisteUsername` es una excepción deliberada a este principio — ver nota. |
 | **A05 – Security Misconfiguration** | ✅ | `A05SecurityMisconfigurationTest` | Un error no controlado devuelve `INTERNAL` **sin** mensaje interno ni stack trace en la `description`; los endpoints de Actuator sensibles (`env`, `beans`, `configprops`, `heapdump`, `threaddump`, `mappings`, `loggers`, `scheduledtasks`) responden 404; `health` no revela componentes. La parte de CORS que llevaba esta clase se retiró junto con `CorsConfig`: no aplica a gRPC (no hay preflight/origen de navegador); si `chat-gateway` (el REST del sistema) tiene su propio CORS, se documenta ahí. |
 | **A06 – Vulnerable & Outdated Components** | ⚠️ No desde tests | — | Se cubre con análisis de dependencias (p. ej. `gradle dependencyCheckAnalyze` / Dependabot / `gradle --refresh-dependencies` + escáner), no con tests unitarios. |
 | **A07 – Identification & Authentication Failures** | ✅ | `A07AuthenticationFailuresTest` | Política de contraseña aplicada en el borde, **antes** de reenviarla al proveedor de identidad: 8–20 caracteres, mayúscula, minúscula, número, carácter especial, y ningún carácter repetido 4 o más veces seguidas. Una contraseña que la viola se rechaza con `INVALID_ARGUMENT` y **ni siquiera llega a la capa de servicio** (no se llama a Firebase con una contraseña que ya sabemos débil). También valida el formato de `username`. |
@@ -37,6 +37,14 @@ Ejecución: `./gradlew test` (van incluidos en la suite normal).
   `UsuarioControllerTest`) vive en `chat-gateway`, no aquí. Si un endpoint de `chat-registro`
   necesitara en el futuro su propio control de acceso (no delegado en el gateway), ahí sí
   correspondería un test A01 en esta suite.
+- **A04 — por qué `ExisteUsername` no cuenta como enumeración insegura:** la resistencia a
+  enumeración de `A04AccountEnumerationTest` es sobre el **alta** (`Registrar`): ahí sí importa
+  que un atacante no distinga "username tomado" de "email tomado" de "ya existe en Firebase".
+  `ExisteUsername` es un endpoint distinto, con un propósito distinto y documentado (validación
+  en vivo de disponibilidad, ver `docs/contrato-grpc-registro.md` §2) — decir que un username
+  está libre no expone nada sensible, así que no lleva el mismo tratamiento genérico. Si en el
+  futuro se decide ocultar también esto (rate-limiting, por ejemplo), es una decisión nueva de
+  producto, no un bug de esta suite.
 - **A02/A07 — quién valida qué:** este servicio impone su propia política de contraseña en el
   borde (evita reenviar al proveedor una contraseña ya sabida débil), pero Firebase aplica la
   suya también al crear la cuenta; ambas capas son independientes y pueden divergir con el
