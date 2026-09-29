@@ -21,7 +21,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Orquesta el alta de usuarios: crea la identidad en el proveedor externo (Firebase Auth,
- * via {@link ProveedorIdentidad}) y persiste el perfil de dominio. Tambien resuelve dos
+ * via {@link ProveedorIdentidad}) y persiste el perfil de dominio (incluido el avatar, si el
+ * usuario eligio uno -- ver {@code RegistroRequest#avatar()}). Tambien resuelve dos
  * consultas de solo lectura: dado un UID de Firebase, a que username/email corresponde
  * ({@link #buscarPorFirebaseUid(String)}); y si un username ya esta en uso
  * ({@link #existeUsername(String)}).
@@ -72,7 +73,8 @@ public class RegistroService {
 	public RegistroResponse registrar(RegistroRequest request) {
 		String username = request.username().trim();
 		String email = request.email().trim().toLowerCase();
-		log.debug(">> registrar(username='{}', email='{}')", username, email);
+		String avatar = request.avatar();
+		log.debug(">> registrar(username='{}', email='{}', avatar='{}')", username, email, escaparParaLog(avatar));
 
 		if (repository.existsByUsernameIgnoreCase(username)) {
 			log.warn("Registro rechazado: el username ya esta registrado. username='{}'", username);
@@ -87,13 +89,13 @@ public class RegistroService {
 
 		try {
 			UsuarioExterno creado = proveedorIdentidad.crearUsuario(email, request.password());
-			RegistroResponse respuesta = guardar(username, email, creado, proveedor, true);
+			RegistroResponse respuesta = guardar(username, email, avatar, creado, proveedor, true);
 			log.debug("<< registrar() -> OK, id={}", respuesta.id());
 			return respuesta;
 		} catch (UsuarioYaRegistradoException ex) {
 			log.warn("El proveedor de identidad ya tenia un usuario con este email; "
 					+ "se intenta reconciliar. email='{}' motivo='{}'", email, ex.getMessage());
-			RegistroResponse respuesta = reconciliar(username, email, proveedor);
+			RegistroResponse respuesta = reconciliar(username, email, avatar, proveedor);
 			log.debug("<< registrar() -> OK (reconciliado), id={}", respuesta.id());
 			return respuesta;
 		} catch (ProveedorIdentidadException ex) {
@@ -148,7 +150,7 @@ public class RegistroService {
 	 * (un alta anterior que fallo a medias, por ejemplo), se crea ahora. Si ya la tiene, es un
 	 * conflicto real.
 	 */
-	private RegistroResponse reconciliar(String username, String email, ProveedorAuth proveedor) {
+	private RegistroResponse reconciliar(String username, String email, String avatar, ProveedorAuth proveedor) {
 		log.debug(">> reconciliar(email='{}')", email);
 		UsuarioExterno existente = proveedorIdentidad.buscarPorEmail(email)
 				.orElseThrow(() -> {
@@ -167,17 +169,19 @@ public class RegistroService {
 				+ "en el proveedor de identidad. email='{}' uid='{}'", email, existente.uid());
 		// No se compensa (no borrar) si el guardado fallara: el usuario ya existia en el
 		// proveedor antes de esta peticion, no lo creamos nosotros ahora.
-		RegistroResponse respuesta = guardar(username, email, existente, proveedor, false);
+		RegistroResponse respuesta = guardar(username, email, avatar, existente, proveedor, false);
 		log.debug("<< reconciliar() -> OK, id={}", respuesta.id());
 		return respuesta;
 	}
 
-	private RegistroResponse guardar(String username, String email, UsuarioExterno usuarioExterno,
+	private RegistroResponse guardar(String username, String email, String avatar, UsuarioExterno usuarioExterno,
 			ProveedorAuth proveedor, boolean revertirEnProveedorSiFalla) {
-		log.debug(">> guardar(username='{}', email='{}', uid='{}')", username, email, usuarioExterno.uid());
+		log.debug(">> guardar(username='{}', email='{}', avatar='{}', uid='{}')",
+				username, email, escaparParaLog(avatar), usuarioExterno.uid());
 		Usuario usuario = new Usuario();
 		usuario.setUsername(username);
 		usuario.setEmail(email);
+		usuario.setAvatar(avatar);
 		usuario.setFirebaseUid(usuarioExterno.uid());
 		usuario.setProveedor(proveedor);
 		usuario.setActivo(true);
@@ -223,5 +227,16 @@ public class RegistroService {
 						"Proveedor de autenticacion no encontrado en proveedores_auth: " + nombreProveedor));
 		log.debug("<< resolverProveedor() -> OK, nombre='{}'", nombreProveedor);
 		return proveedor;
+	}
+
+	/**
+	 * Reemplaza '\r'/'\n' por su representacion literal antes de meter {@code avatar} en un log
+	 * -- el {@code @Pattern} de {@code RegistroRequest#avatar()} ya rechaza saltos de linea, asi
+	 * que en la practica esto es defensa en profundidad (por si algun dia se llama a este
+	 * servicio sin pasar por esa validacion). Paquete-visible para que {@code RegistroServiceTest}
+	 * la pruebe directo.
+	 */
+	static String escaparParaLog(String valor) {
+		return valor == null ? null : valor.replace("\r", "\\r").replace("\n", "\\n");
 	}
 }

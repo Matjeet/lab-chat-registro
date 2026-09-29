@@ -107,6 +107,30 @@ class A03InjectionTest {
 		}
 	}
 
+	@ParameterizedTest
+	@ValueSource(strings = {
+			"<script>alert(1)</script>",
+			"<img src=x onerror=alert(1)>",
+			"<Blobatar name=\"x\"/><script>alert(1)</script>",
+			"javascript:alert(1)",
+			"' OR '1'='1",
+			"<Blobatar name=\"x\r\nWARN log falso inyectado\" />",
+	})
+	void registro_payloadDeInyeccionEnAvatar_seRechazaSinError(String payload) {
+		// Arrange
+		CapturingStreamObserver<RegistrarUsuarioResponse> observer = new CapturingStreamObserver<>();
+
+		// Act
+		controller.registrar(RegistrarUsuarioRequest.newBuilder()
+				.setUsername("injavatar").setEmail("injavatar@example.com").setPassword(PASSWORD_VALIDA)
+				.setAvatar(payload)
+				.build(), observer);
+
+		// Assert: el @Pattern de avatar lo rechaza -- nunca queda una etiqueta ajena persistida
+		assertThat(observer.tieneError()).isTrue();
+		assertThat(observer.errorDeEstado().getStatus().getCode()).isEqualTo(Status.Code.INVALID_ARGUMENT);
+	}
+
 	@Test
 	void repositorio_consultaParametrizada_tratraElPayloadComoLiteral() {
 		// Arrange

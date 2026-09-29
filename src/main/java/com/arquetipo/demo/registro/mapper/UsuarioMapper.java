@@ -17,6 +17,7 @@ public class UsuarioMapper {
 				usuario.getId(),
 				usuario.getUsername(),
 				usuario.getEmail(),
+				usuario.getAvatar(),
 				usuario.getProveedor().getNombre(),
 				usuario.isActivo(),
 				usuario.getCreatedAt());
