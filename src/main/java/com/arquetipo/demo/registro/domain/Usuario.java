@@ -43,6 +43,14 @@ public class Usuario {
 	@Column(nullable = false, unique = true, length = 255)
 	private String email;
 
+	/**
+	 * Enlace http(s) o etiqueta {@code <Blobatar .../>}, ya validado y normalizado (sin comillas
+	 * envolventes) por {@code RegistroGrpcMapper}/{@code RegistroRequest}. Null si el usuario no
+	 * eligio avatar.
+	 */
+	@Column(length = 500)
+	private String avatar;
+
 	/** UID que Firebase Authentication asigna al usuario. Identificador opaco, no un secreto. */
 	@Column(name = "firebase_uid", nullable = false, unique = true, length = 128)
 	private String firebaseUid;

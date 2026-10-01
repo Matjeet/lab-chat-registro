@@ -56,7 +56,11 @@ class RegistroServiceTest {
 	}
 
 	private static RegistroRequest request() {
-		return new RegistroRequest("mateo", "Mateo@Example.com", PASSWORD_VALIDA);
+		return new RegistroRequest("mateo", "Mateo@Example.com", PASSWORD_VALIDA, null);
+	}
+
+	private static RegistroRequest requestConAvatar(String avatar) {
+		return new RegistroRequest("mateo", "Mateo@Example.com", PASSWORD_VALIDA, avatar);
 	}
 
 	private static ProveedorAuth proveedor(String nombre) {
@@ -217,6 +221,62 @@ class RegistroServiceTest {
 	}
 
 	@Test
+	void registrar_conAvatar_loPersisteEnLaEntidadYLoDevuelveEnLaRespuesta() {
+		stubProveedorFeliz();
+		String avatar = "https://cdn.example.com/avatares/mateo.png";
+		when(repository.existsByUsernameIgnoreCase("mateo")).thenReturn(false);
+		when(repository.existsByEmailIgnoreCase("mateo@example.com")).thenReturn(false);
+		when(proveedorIdentidad.crearUsuario("mateo@example.com", PASSWORD_VALIDA))
+				.thenReturn(new UsuarioExterno("uid-nuevo-1"));
+		when(repository.saveAndFlush(any(Usuario.class))).thenAnswer(inv -> {
+			Usuario u = inv.getArgument(0);
+			u.setId(1L);
+			return u;
+		});
+
+		RegistroResponse response = service.registrar(requestConAvatar(avatar));
+
+		assertThat(response.avatar()).isEqualTo(avatar);
+		ArgumentCaptor<Usuario> captor = ArgumentCaptor.forClass(Usuario.class);
+		verify(repository).saveAndFlush(captor.capture());
+		assertThat(captor.getValue().getAvatar()).isEqualTo(avatar);
+	}
+
+	@Test
+	void registrar_sinAvatar_loPersisteComoNulo() {
+		stubProveedorFeliz();
+		when(repository.existsByUsernameIgnoreCase("mateo")).thenReturn(false);
+		when(repository.existsByEmailIgnoreCase("mateo@example.com")).thenReturn(false);
+		when(proveedorIdentidad.crearUsuario("mateo@example.com", PASSWORD_VALIDA))
+				.thenReturn(new UsuarioExterno("uid-nuevo-1"));
+		when(repository.saveAndFlush(any(Usuario.class))).thenAnswer(inv -> inv.getArgument(0));
+
+		RegistroResponse response = service.registrar(request());
+
+		assertThat(response.avatar()).isNull();
+	}
+
+	@Test
+	void registrar_reconciliacionConAvatar_loPersisteEnLaFilaCreadaAhora() {
+		stubProveedorFeliz();
+		String avatar = "<Blobatar name=\"mateo\" animate=\"hover\" />";
+		when(repository.existsByUsernameIgnoreCase("mateo")).thenReturn(false);
+		when(repository.existsByEmailIgnoreCase("mateo@example.com")).thenReturn(false);
+		when(proveedorIdentidad.crearUsuario(eq("mateo@example.com"), any()))
+				.thenThrow(new UsuarioYaRegistradoException("ya existe", null));
+		when(proveedorIdentidad.buscarPorEmail("mateo@example.com"))
+				.thenReturn(Optional.of(new UsuarioExterno("uid-preexistente")));
+		when(repository.existsByFirebaseUid("uid-preexistente")).thenReturn(false);
+		when(repository.saveAndFlush(any(Usuario.class))).thenAnswer(inv -> inv.getArgument(0));
+
+		service.registrar(requestConAvatar(avatar));
+
+		ArgumentCaptor<Usuario> captor = ArgumentCaptor.forClass(Usuario.class);
+		verify(repository).saveAndFlush(captor.capture());
+		assertThat(captor.getValue().getAvatar()).isEqualTo(avatar);
+	}
+
+	@Test
 	void registrar_reconciliacionConFalloDeGuardado_noBorraElUsuarioPreexistente() {
 		stubProveedorFeliz();
 		when(repository.existsByUsernameIgnoreCase("mateo")).thenReturn(false);
@@ -295,6 +355,13 @@ class RegistroServiceTest {
 
 		assertThat(service.existeUsername("  mateo  ")).isTrue();
 		verify(repository).existsByUsernameIgnoreCase("mateo");
+	}
+
+	@Test
+	void escaparParaLog_reemplazaSaltosDeLineaYPreservaNulo() {
+		assertThat(RegistroService.escaparParaLog("a\nb\rc")).isEqualTo("a\\nb\\rc");
+		assertThat(RegistroService.escaparParaLog("sin-saltos")).isEqualTo("sin-saltos");
+		assertThat(RegistroService.escaparParaLog(null)).isNull();
 	}
 
 	@Test

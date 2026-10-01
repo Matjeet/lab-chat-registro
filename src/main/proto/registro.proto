@@ -33,6 +33,18 @@ message RegistrarUsuarioRequest {
   string username = 1;
   string email = 2;
   string password = 3;
+
+  // Avatar del usuario. Opcional -- proto3 no distingue "avatar ausente" de cadena vacia,
+  // "" se trata como "sin avatar" (null), igual que si no se hubiera asignado el campo. Solo
+  // se admiten dos formatos, nada mas (ver el @Pattern de RegistroRequest en
+  // web/dto/RegistroRequest.java, que es la fuente de verdad de la validacion):
+  //   - Un enlace http(s) comun.
+  //   - Una etiqueta <Blobatar .../> (avatar animado generado por la libreria "Blobatar"),
+  //     que el frontend renderiza tal cual, sin interpretarla.
+  // Si el valor llega envuelto en un unico par de comillas rectas (simples o dobles) que
+  // encierran toda la cadena, se retiran antes de validar/persistir -- ver
+  // RegistroGrpcMapper#normalizarAvatar.
+  string avatar = 4;
 }
 
 // Mismos campos que RegistroResponse (web/dto/RegistroResponse.java). No expone el uid del
@@ -46,6 +58,9 @@ message RegistrarUsuarioResponse {
   // Instant en formato ISO-8601 (mismo formato que la serializacion JSON de Instant en la
   // respuesta REST), p. ej. "2026-09-08T20:53:47.441193Z".
   string created_at = 6;
+  // Vacio si el usuario no eligio avatar. Mismo valor ya normalizado (sin comillas
+  // envolventes) que quedo persistido -- ver RegistrarUsuarioRequest.avatar.
+  string avatar = 7;
 }
 
 message BuscarUsuarioPorUidRequest {

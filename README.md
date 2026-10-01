@@ -48,6 +48,7 @@ que las tablas cuadran con las entidades y no modifica nada.
 |---|---|
 | `V1__crear_tabla_usuarios.sql` | Tabla `usuarios` (username, email, password_hash — ya retirada, ver `V2`). |
 | `V2__usuarios_firebase_auth.sql` | Tabla auxiliar `proveedores_auth` (sembrada con los `providerId` de Firebase Auth); en `usuarios` quita `password_hash` y añade `firebase_uid` (único) y `proveedor_id` (FK a `proveedores_auth`). |
+| `V3__usuarios_avatar.sql` | Añade `avatar VARCHAR(500) NULL` a `usuarios` — ver *Avatar del usuario* más abajo. |
 
 Para un cambio de esquema se añade un fichero nuevo `V<n>__descripcion.sql` (nunca se edita
 uno ya aplicado) y se ajusta la entidad JPA correspondiente.
@@ -95,6 +96,8 @@ servidor; no son campos de la petición. La contraseña en claro se reenvía a F
   especial (cualquiera que no sea letra, número o espacio); ningún carácter repetido 4 o más
   veces seguidas (`aaaa` no vale, `aaa` sí). Se valida aquí (para no reenviar al proveedor una
   contraseña que ya sabemos débil) y de nuevo la aplica Firebase al crear la cuenta.
+- `avatar`: **opcional** (≤500 caracteres). Solo dos formatos, nada más — ver *Avatar del
+  usuario* más abajo.
 
 Resultado: el usuario creado (`RegistrarUsuarioResponse`) · `ALREADY_EXISTS` si los datos
 entran en conflicto con una cuenta existente (username, email, o el usuario ya existente en
@@ -118,6 +121,30 @@ servidor (`WARN`/`ERROR`), para no facilitar la enumeración de cuentas.
 4. Si Firebase creó el usuario pero **el guardado en la base de datos falla**, se **revierte**
    (borra) el usuario recién creado en Firebase, para no dejarlo huérfano. En la rama de
    reconciliación nunca se borra: ese usuario ya existía en Firebase antes de esta petición.
+
+### Avatar del usuario
+
+`avatar` es opcional en `Registrar`. Se admiten **solo dos formatos**, ningún otro:
+
+- Un enlace `http(s)` común.
+- Una etiqueta `<Blobatar .../>` (avatar animado de la librería del mismo nombre) que el
+  frontend renderiza tal cual, sin interpretarla — cualquier otro nombre de etiqueta, o
+  contenido con `<`/`>` dentro de sus atributos, se rechaza (`INVALID_ARGUMENT`), para que este
+  campo no se pueda usar para colar HTML/JSX ajeno si el frontend llega a insertarlo sin
+  escapar.
+
+En ambos formatos, **sin saltos de línea** (una sola línea): si generas la etiqueta formateada
+en varias líneas por legibilidad, colápsala a una sola antes de enviarla. No es solo estilo —
+este valor se registra tal cual en el log de trazabilidad de entrada antes de que exista
+oportunidad de validarlo, así que permitir `\n`/`\r` habilitaría forjar líneas de log falsas.
+
+proto3 no distingue "avatar ausente" de cadena vacía: `""` se trata como "sin avatar" (se
+persiste `NULL`). Si el valor llega envuelto en un único par de comillas rectas (simples o
+dobles) que encierran toda la cadena — p. ej. copiado tal cual un literal de string en vez de
+su contenido —, se retira ese par exterior antes de validar/persistir, sin tocar nada más del
+contenido (`RegistroGrpcMapper#normalizarAvatar`). Se persiste en la nueva columna
+`avatar VARCHAR(500) NULL` de `usuarios` (`V3__usuarios_avatar.sql`) y se devuelve tal cual en
+`RegistrarUsuarioResponse.avatar`.
 
 ### Consulta por UID de Firebase
 
@@ -199,7 +226,8 @@ src/main/resources/db
 ├── bootstrap.sql                            esquema + usuario (se ejecuta como root, 1 vez)
 └── migration/
     ├── V1__crear_tabla_usuarios.sql          migración Flyway inicial
-    └── V2__usuarios_firebase_auth.sql        quita password_hash; añade firebase_uid + proveedores_auth
+    ├── V2__usuarios_firebase_auth.sql        quita password_hash; añade firebase_uid + proveedores_auth
+    └── V3__usuarios_avatar.sql               añade avatar VARCHAR(500) NULL
 ```
 
 Flujo de una petición: `RegistroGrpcController` (valida) → `RegistroService` (transacciones +
@@ -293,6 +321,8 @@ service RegistroGrpcService {
 - **`ExisteUsername`**: `true`/`false` sobre si un username ya está en uso — ver
   *Disponibilidad de un username* más arriba. Es el único rpc pensado para ser público (sin
   sesión ni token detrás).
+- **`avatar` en `Registrar`**: opcional, solo URL http(s) o etiqueta `<Blobatar .../>` — ver
+  *Avatar del usuario* más arriba.
 - **Errores de `Registrar`** (mismo principio de mensaje genérico al cliente / detalle real
   solo en el log):
 
