@@ -68,6 +68,7 @@ public class RegistroGrpcMapper {
 		return BuscarUsuarioPorUidResponse.newBuilder()
 				.setUsername(usuario.username())
 				.setEmail(usuario.email())
+				.setAvatar(usuario.avatar() == null ? "" : usuario.avatar())
 				.build();
 	}
 }

@@ -107,9 +107,9 @@ public class RegistroService {
 	}
 
 	/**
-	 * Resuelve username/email a partir del UID que Firebase le asigno al usuario, para que otro
-	 * servicio (via gRPC, siempre {@code chat-gateway}) sepa a que cuenta corresponde una
-	 * sesion ya autenticada.
+	 * Resuelve username/email/avatar a partir del UID que Firebase le asigno al usuario, para
+	 * que otro servicio (via gRPC, siempre {@code chat-gateway}) sepa a que cuenta corresponde
+	 * una sesion ya autenticada.
 	 *
 	 * <p>Este servicio <b>no</b> valida tokens de identidad ni comprueba que quien pregunta sea
 	 * el dueno del uid — esa autenticacion y autorizacion las resuelve {@code chat-gateway}

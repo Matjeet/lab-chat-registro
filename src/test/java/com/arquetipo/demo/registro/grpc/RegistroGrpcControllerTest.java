@@ -251,15 +251,28 @@ class RegistroGrpcControllerTest {
 	}
 
 	@Test
-	void buscarUsuarioPorUid_usuarioExiste_devuelveUsernameYEmail() {
+	void buscarUsuarioPorUid_usuarioExiste_devuelveUsernameEmailYAvatar() {
 		when(registroService.buscarPorFirebaseUid("uid-existente"))
-				.thenReturn(new UsuarioBasico("mateo", "mateo@example.com"));
+				.thenReturn(new UsuarioBasico("mateo", "mateo@example.com",
+						"https://cdn.example.com/avatares/mateo.png"));
 
 		BuscarUsuarioPorUidResponse respuesta = stub.buscarUsuarioPorUid(
 				BuscarUsuarioPorUidRequest.newBuilder().setUid("uid-existente").build());
 
 		assertThat(respuesta.getUsername()).isEqualTo("mateo");
 		assertThat(respuesta.getEmail()).isEqualTo("mateo@example.com");
+		assertThat(respuesta.getAvatar()).isEqualTo("https://cdn.example.com/avatares/mateo.png");
+	}
+
+	@Test
+	void buscarUsuarioPorUid_usuarioSinAvatar_devuelveAvatarVacio() {
+		when(registroService.buscarPorFirebaseUid("uid-existente"))
+				.thenReturn(new UsuarioBasico("mateo", "mateo@example.com", null));
+
+		BuscarUsuarioPorUidResponse respuesta = stub.buscarUsuarioPorUid(
+				BuscarUsuarioPorUidRequest.newBuilder().setUid("uid-existente").build());
+
+		assertThat(respuesta.getAvatar()).isEmpty();
 	}
 
 	@Test

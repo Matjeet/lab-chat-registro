@@ -28,6 +28,9 @@ La fuente de verdad ejecutable es el propio `.proto`:
 | Reflexión de servicio | Habilitada (`io.grpc:grpc-services`) — un cliente puede descubrir el contrato sin tener el `.proto`, ver §7 |
 | Autenticación | Ninguna en ninguno de los tres rpc. **Este servicio no valida tokens de identidad**: `chat-gateway` es el único punto del sistema con integración con Firebase para verificar tokens (`Authorization: Bearer <idToken>`) — a `chat-registro` solo le llega, ya autenticado y autorizado, el dato que necesita (p. ej. el `uid` en `BuscarUsuarioPorUid`). `ExisteUsername` ni siquiera necesita eso: es una consulta pública de disponibilidad, ver §2. Pensado para tráfico interno exclusivamente; nunca se expone directamente a internet. |
 
+> `BuscarUsuarioPorUidResponse` incluye `avatar` desde 2026-09-30 (ver §8) — mismo criterio
+> que `RegistrarUsuarioResponse.avatar`.
+
 > El puerto real por entorno lo define infraestructura; en producción probablemente vaya
 > detrás de una red interna o un proxy con TLS. Pregunta al equipo de infraestructura la
 > dirección de tu entorno si no es `localhost:9090`.
@@ -78,6 +81,7 @@ message BuscarUsuarioPorUidRequest {
 message BuscarUsuarioPorUidResponse {
   string username = 1;
   string email = 2;
+  string avatar = 3;
 }
 
 message ExisteUsernameRequest {
@@ -146,6 +150,7 @@ de llamar aquí**. `chat-registro` no repite esa verificación: confía en el `u
 | `uid` | `BuscarUsuarioPorUidRequest` | `string` | sí | UID que Firebase Authentication le asignó al usuario al crear la cuenta. Identificador opaco, no un secreto. Vacío → `INVALID_ARGUMENT`. |
 | `username` | `BuscarUsuarioPorUidResponse` | `string` | — | El `username` con el que se registró. |
 | `email` | `BuscarUsuarioPorUidResponse` | `string` | — | El `email` (normalizado a minúsculas) con el que se registró. |
+| `avatar` | `BuscarUsuarioPorUidResponse` | `string` | — | Vacío si el usuario no eligió avatar. Mismo valor ya normalizado que `RegistrarUsuarioResponse.avatar` (ver §2 arriba). |
 
 > No expone nada más del perfil (ni `id`, ni `proveedor`, ni `createdAt`) — si en el futuro
 > hace falta más, se amplía este mensaje, no se reutiliza `RegistrarUsuarioResponse`.
@@ -231,7 +236,8 @@ Respuesta:
 ```json
 {
   "username": "mateo",
-  "email": "mateo@example.com"
+  "email": "mateo@example.com",
+  "avatar": "https://cdn.example.com/avatares/mateo.png"
 }
 ```
 
@@ -368,9 +374,15 @@ Respuesta `200 OK`:
 ```json
 {
   "username": "mateo",
-  "email": "mateo@example.com"
+  "email": "mateo@example.com",
+  "avatar": "https://cdn.example.com/avatares/mateo.png"
 }
 ```
+
+> `avatar` es nuevo en `BuscarUsuarioPorUidResponse` (ver §2 y el changelog en §8) — si
+> `chat-gateway` ya tiene su propio modelo de respuesta para esta fachada, hay que sumarle el
+> campo ahí también para que llegue hasta el cliente final; este documento solo garantiza que
+> `chat-registro` ya lo devuelve por gRPC.
 
 | Código HTTP | Cuándo | Resuelto por |
 |---|---|---|
@@ -414,6 +426,7 @@ pueden listar servicios y construir la petición sin el archivo, apuntando solo 
 
 | Fecha | Cambio |
 |---|---|
+| 2026-09-30 | Se añade `avatar` a `BuscarUsuarioPorUidResponse` (vacío si el usuario no eligió uno) — mismo valor ya persistido que `RegistrarUsuarioResponse.avatar`, resuelto junto con `username`/`email` en la misma consulta. |
 | 2026-09-29 | Se añade `avatar` (opcional) a `RegistrarUsuarioRequest`/`RegistrarUsuarioResponse`: URL http(s) o etiqueta `<Blobatar .../>`, nada más — validado con `@Pattern`, normalizado (comillas envolventes) antes de validar, persistido en la nueva columna `usuarios.avatar` (`V3__usuarios_avatar.sql`). |
 | 2026-09-22 | Se añade `ExisteUsername` (booleano de disponibilidad de un `username`, sin autenticación — consulta pública, a diferencia de `BuscarUsuarioPorUid`). |
 | 2026-09-20 | Se revierte el cambio del 2026-09-19 (2): `BuscarUsuarioPorUid` vuelve a no llevar `id_token` ni verificar nada — decisión de arquitectura explícita: **`chat-gateway` es el único punto del sistema que valida tokens de identidad** (con su propia integración con Firebase Admin SDK), para que futuros microservicios que necesiten autenticación no tengan que integrarse cada uno con Firebase. `chat-registro` conserva Firebase únicamente para crear/eliminar/buscar cuentas en el alta. Se quitan `TokenIdentidadInvalidoException`/`AccesoNoAutorizadoException` y el test `A01BrokenAccessControlTest` (esa propiedad de seguridad ahora se prueba en `chat-gateway`). |
