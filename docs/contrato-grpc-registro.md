@@ -58,6 +58,7 @@ message RegistrarUsuarioRequest {
   string username = 1;
   string email = 2;
   string password = 3;
+  string avatar = 4;
 }
 
 message RegistrarUsuarioResponse {
@@ -67,6 +68,7 @@ message RegistrarUsuarioResponse {
   string proveedor = 4;
   bool activo = 5;
   string created_at = 6;
+  string avatar = 7;
 }
 
 message BuscarUsuarioPorUidRequest {
@@ -94,10 +96,29 @@ message ExisteUsernameResponse {
 | `username` | `string` | sí | 3–50 caracteres. Solo `A–Z a–z 0–9 . _ -`. Único (sin distinguir mayúsculas). |
 | `email` | `string` | sí | Formato de email válido. Máx. 255 caracteres. Único (sin distinguir mayúsculas). Se normaliza a minúsculas antes de guardar. |
 | `password` | `string` | sí | 8–20 caracteres. Al menos una mayúscula, una minúscula, un número y un carácter especial (cualquiera que no sea letra, número o espacio). Ningún carácter repetido 4 o más veces seguidas (`aaaa` inválido, `aaa` válido). Se reenvía al proveedor de identidad y **no se persiste** en este servicio. |
+| `avatar` | `string` | no | ≤500 caracteres, **en una sola línea** (sin `\n`/`\r`, en ninguno de los dos formatos). Solo dos formatos, nada más: un enlace `http(s)` común, o una etiqueta `<Blobatar .../>` (avatar animado de la librería del mismo nombre) que el frontend renderiza tal cual. Cualquier otra cosa (otra etiqueta HTML/JSX, un esquema de URL distinto de `http`/`https` como `javascript:`/`data:`, una etiqueta `Blobatar` con contenido `<`/`>` dentro de sus atributos, o con un salto de línea embebido) → `INVALID_ARGUMENT`. |
 
 > proto3 no distingue "campo ausente" de "cadena vacía": un `username`/`email`/`password` no
 > asignado en el mensaje llega como `""` al servidor y falla la validación de longitud mínima
 > igual que si lo hubieras mandado vacío a propósito — no hace falta ningún wrapper `optional`.
+> `avatar` es la excepción: al ser opcional, `""` (o solo espacios) se trata explícitamente como
+> "sin avatar" (se persiste `NULL`) antes de aplicar el `@Pattern`, para no rechazar la ausencia
+> del campo como si fuera un formato inválido.
+>
+> Si el valor de `avatar` llega envuelto en un único par de comillas rectas (simples o dobles)
+> que encierran toda la cadena — p. ej. copiado tal cual un literal de string en vez de su
+> contenido —, el servidor retira ese par exterior antes de validar/persistir, sin alterar nada
+> más del contenido (`RegistroGrpcMapper#normalizarAvatar`). Esto ocurre **antes** de aplicar el
+> `@Pattern`, así que la validación siempre ve el valor ya "desnudo".
+>
+> **Por qué "una sola línea" y no solo una recomendación**: el valor de `avatar` se registra en
+> el log de trazabilidad de entrada (`RegistroGrpcController.registrar`, nivel `DEBUG`) **antes**
+> de que exista cualquier otra oportunidad de validarlo o normalizarlo — es una traza de "esto es
+> lo que llegó", no de "esto es lo que se aceptó". Permitir `\n`/`\r` ahí habilitaría forjar
+> líneas de log falsas (CWE-117, log injection) con solo enviar una petición, sin ni siquiera
+> necesitar que el alta tenga éxito. Por eso el servidor además escapa (`\n`/`\r` → `\\n`/`\\r`,
+> nunca los inserta tal cual) ese valor concreto en los tres puntos donde se loguea, como
+> segunda capa independiente del `@Pattern`.
 
 ### `RegistrarUsuarioResponse`
 
@@ -109,6 +130,7 @@ message ExisteUsernameResponse {
 | `proveedor` | `string` | Proveedor de identidad usado en el alta (hoy siempre `"password"`). |
 | `activo` | `bool` | Siempre `true` en un alta nueva. |
 | `created_at` | `string` | Instante de creación en UTC, **ISO-8601** (ej. `"2026-09-08T20:53:47.441193Z"`). Se manda como `string`, no como `google.protobuf.Timestamp`, para no forzar esa dependencia en el cliente. |
+| `avatar` | `string` | Vacío si el usuario no eligió avatar. El mismo valor ya normalizado (sin comillas envolventes) que quedó persistido. |
 
 > El UID del proveedor de identidad **no** se devuelve — el cliente no lo necesita.
 
@@ -155,7 +177,8 @@ autenticada.
 grpcurl -plaintext -d '{
   "username": "mateo",
   "email": "mateo@example.com",
-  "password": "Passw0rd!23"
+  "password": "Passw0rd!23",
+  "avatar": "https://cdn.example.com/avatares/mateo.png"
 }' localhost:9090 com.arquetipo.demo.registro.grpc.RegistroGrpcService/Registrar
 ```
 
@@ -168,9 +191,13 @@ Respuesta:
   "email": "mateo@example.com",
   "proveedor": "password",
   "activo": true,
-  "createdAt": "2026-09-08T20:53:47.441193Z"
+  "createdAt": "2026-09-08T20:53:47.441193Z",
+  "avatar": "https://cdn.example.com/avatares/mateo.png"
 }
 ```
+
+> `avatar` es opcional: se puede omitir del JSON (o mandar `""`) y el alta sigue igual, solo que
+> sin avatar (`NULL` en base de datos, `""` en la respuesta).
 
 ### Cliente Java (stub bloqueante, generado a partir del `.proto`)
 
@@ -248,7 +275,7 @@ expresada con códigos gRPC.
 
 | Situación | Código gRPC | `description` |
 |---|---|---|
-| El cuerpo no supera Bean Validation | `INVALID_ARGUMENT` | `"El cuerpo de la peticion no supero la validacion -> <campo>: <mensaje>; ..."` (un `campo: mensaje` por cada violación) |
+| El cuerpo no supera Bean Validation (incluido un `avatar` con un formato que no es ni URL http(s) ni `<Blobatar .../>`) | `INVALID_ARGUMENT` | `"El cuerpo de la peticion no supero la validacion -> <campo>: <mensaje>; ..."` (un `campo: mensaje` por cada violación) |
 | `username`/`email` duplicado, o el usuario ya existe en el proveedor de identidad | `ALREADY_EXISTS` | Mensaje genérico fijo: `"No se pudo completar el registro con los datos proporcionados"` — **nunca** indica qué campo colisionó |
 | Cualquier otro fallo (proveedor de identidad, base de datos, bug interno) | `INTERNAL` | Mensaje genérico fijo: `"Ocurrio un error inesperado. Contacte con soporte."` |
 
@@ -308,7 +335,9 @@ infraestructura de gRPC.
 - `Registrar` traduce el mensaje proto a `RegistroRequest` y delega en `RegistroService`, que
   es quien orquesta todo (alta en el proveedor de identidad, reconciliación si ya existía,
   compensación si el guardado local falla) — ver `README.md` §*Orquestación y compensación*
-  para el detalle completo.
+  para el detalle completo. La traducción incluye normalizar `avatar` (`""`/comillas
+  envolventes) **antes** de validar — ver `RegistroGrpcMapper#normalizarAvatar` y la nota de
+  §2.
 - `BuscarUsuarioPorUid` delega en `RegistroService.buscarPorFirebaseUid(uid)`, que hace una
   única consulta de solo lectura (`UsuarioRepository.findByFirebaseUid`) — no hay
   orquestación, compensación, ni verificación de identidad que explicar aquí: eso lo resuelve
@@ -385,6 +414,7 @@ pueden listar servicios y construir la petición sin el archivo, apuntando solo 
 
 | Fecha | Cambio |
 |---|---|
+| 2026-09-29 | Se añade `avatar` (opcional) a `RegistrarUsuarioRequest`/`RegistrarUsuarioResponse`: URL http(s) o etiqueta `<Blobatar .../>`, nada más — validado con `@Pattern`, normalizado (comillas envolventes) antes de validar, persistido en la nueva columna `usuarios.avatar` (`V3__usuarios_avatar.sql`). |
 | 2026-09-22 | Se añade `ExisteUsername` (booleano de disponibilidad de un `username`, sin autenticación — consulta pública, a diferencia de `BuscarUsuarioPorUid`). |
 | 2026-09-20 | Se revierte el cambio del 2026-09-19 (2): `BuscarUsuarioPorUid` vuelve a no llevar `id_token` ni verificar nada — decisión de arquitectura explícita: **`chat-gateway` es el único punto del sistema que valida tokens de identidad** (con su propia integración con Firebase Admin SDK), para que futuros microservicios que necesiten autenticación no tengan que integrarse cada uno con Firebase. `chat-registro` conserva Firebase únicamente para crear/eliminar/buscar cuentas en el alta. Se quitan `TokenIdentidadInvalidoException`/`AccesoNoAutorizadoException` y el test `A01BrokenAccessControlTest` (esa propiedad de seguridad ahora se prueba en `chat-gateway`). |
 | 2026-09-19 (2) | *(revertido el 2026-09-20)* `BuscarUsuarioPorUid` pasó a exigir y verificar `id_token` él mismo. |

@@ -18,7 +18,9 @@ import org.springframework.stereotype.Component;
 
 /**
  * Punto de entrada del registro y consulta de usuarios: {@code registrar} recibe {@code
- * username}/{@code email}/{@code password}; {@code buscarUsuarioPorUid} resuelve
+ * username}/{@code email}/{@code password}/{@code avatar} (opcional, solo enlace http(s) o
+ * etiqueta {@code <Blobatar .../>} -- ver {@link RegistroRequest#avatar()}); {@code
+ * buscarUsuarioPorUid} resuelve
  * username/email a partir del UID de Firebase de una sesion ya autenticada; {@code
  * existeUsername} dice si un username ya esta en uso. En los tres casos delega en
  * {@link RegistroService} (unica logica de negocio, sin duplicarla aqui). Es el unico
@@ -76,7 +78,11 @@ public class RegistroGrpcController extends RegistroGrpcServiceGrpc.RegistroGrpc
 	@Override
 	public void registrar(RegistrarUsuarioRequest grpcRequest,
 			StreamObserver<RegistrarUsuarioResponse> responseObserver) {
-		log.debug(">> registrar(username='{}', email='{}')", grpcRequest.getUsername(), grpcRequest.getEmail());
+		// avatar se registra ya escapado: este log es anterior a la validacion (Bean Validation
+		// ya rechaza saltos de linea en avatar, pero eso no protege este log de trazabilidad en
+		// si -- ver escaparParaLog).
+		log.debug(">> registrar(username='{}', email='{}', avatar='{}')",
+				grpcRequest.getUsername(), grpcRequest.getEmail(), escaparParaLog(grpcRequest.getAvatar()));
 		RegistroRequest request = mapper.aRegistroRequest(grpcRequest);
 
 		Set<ConstraintViolation<RegistroRequest>> violaciones = validator.validate(request);
@@ -159,5 +165,16 @@ public class RegistroGrpcController extends RegistroGrpcServiceGrpc.RegistroGrpc
 		return Status.INVALID_ARGUMENT
 				.withDescription(DETALLE_VALIDACION + " -> " + detalle)
 				.asRuntimeException();
+	}
+
+	/**
+	 * Reemplaza '\r'/'\n' por su representacion literal antes de meter un valor de entrada sin
+	 * validar en un log -- sin esto, un {@code avatar} con saltos de linea embebidos podria
+	 * forjar lineas de log falsas (CWE-117) en el mismo instante en que se registra, antes de
+	 * que la validacion (que ya rechaza esos caracteres en {@code avatar}) tenga oportunidad de
+	 * actuar. Paquete-visible para que {@code RegistroGrpcControllerTest} la pruebe directo.
+	 */
+	static String escaparParaLog(String valor) {
+		return valor == null ? null : valor.replace("\r", "\\r").replace("\n", "\\n");
 	}
 }

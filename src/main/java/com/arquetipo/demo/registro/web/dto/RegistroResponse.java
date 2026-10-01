@@ -17,6 +17,9 @@ public record RegistroResponse(
 
 		String email,
 
+		/** Null si el usuario no eligio avatar. Ver {@code RegistroRequest#avatar}. */
+		String avatar,
+
 		String proveedor,
 
 		boolean activo,

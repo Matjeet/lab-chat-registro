@@ -85,7 +85,8 @@ class A07AuthenticationFailuresTest {
 	void registro_contrasenaQueCumpleLaPolitica_pasaLaValidacion(String contrasenaValida) {
 		// Arrange
 		when(registroService.registrar(any()))
-				.thenReturn(new RegistroResponse(1L, "usuario", "usuario@example.com", "password", true, Instant.now()));
+				.thenReturn(new RegistroResponse(
+					1L, "usuario", "usuario@example.com", null, "password", true, Instant.now()));
 		CapturingStreamObserver<RegistrarUsuarioResponse> observer = new CapturingStreamObserver<>();
 
 		// Act

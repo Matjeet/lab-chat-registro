@@ -56,7 +56,7 @@ class A09SecurityLoggingTest {
 	}
 
 	private static RegistroRequest request() {
-		return new RegistroRequest("mateo", "mateo@example.com", PASSWORD_VALIDA);
+		return new RegistroRequest("mateo", "mateo@example.com", PASSWORD_VALIDA, null);
 	}
 
 	private static ProveedorAuth proveedorPassword() {
