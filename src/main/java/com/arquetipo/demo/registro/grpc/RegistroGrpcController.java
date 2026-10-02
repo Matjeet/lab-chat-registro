@@ -21,7 +21,7 @@ import org.springframework.stereotype.Component;
  * username}/{@code email}/{@code password}/{@code avatar} (opcional, solo enlace http(s) o
  * etiqueta {@code <Blobatar .../>} -- ver {@link RegistroRequest#avatar()}); {@code
  * buscarUsuarioPorUid} resuelve
- * username/email a partir del UID de Firebase de una sesion ya autenticada; {@code
+ * username/email/avatar a partir del UID de Firebase de una sesion ya autenticada; {@code
  * existeUsername} dice si un username ya esta en uso. En los tres casos delega en
  * {@link RegistroService} (unica logica de negocio, sin duplicarla aqui). Es el unico
  * protocolo que expone este servicio — el REST del sistema lo sirve {@code chat-gateway}, que
