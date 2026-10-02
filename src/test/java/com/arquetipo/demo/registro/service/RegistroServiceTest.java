@@ -314,7 +314,23 @@ class RegistroServiceTest {
 	}
 
 	@Test
-	void buscarPorFirebaseUid_usuarioExiste_devuelveUsernameYEmail() {
+	void buscarPorFirebaseUid_usuarioExiste_devuelveUsernameEmailYAvatar() {
+		Usuario usuario = new Usuario();
+		usuario.setUsername("mateo");
+		usuario.setEmail("mateo@example.com");
+		usuario.setAvatar("https://cdn.example.com/avatares/mateo.png");
+		usuario.setFirebaseUid("uid-existente");
+		when(repository.findByFirebaseUid("uid-existente")).thenReturn(Optional.of(usuario));
+
+		UsuarioBasico resultado = service.buscarPorFirebaseUid("uid-existente");
+
+		assertThat(resultado.username()).isEqualTo("mateo");
+		assertThat(resultado.email()).isEqualTo("mateo@example.com");
+		assertThat(resultado.avatar()).isEqualTo("https://cdn.example.com/avatares/mateo.png");
+	}
+
+	@Test
+	void buscarPorFirebaseUid_usuarioSinAvatar_devuelveAvatarNulo() {
 		Usuario usuario = new Usuario();
 		usuario.setUsername("mateo");
 		usuario.setEmail("mateo@example.com");
@@ -323,8 +339,7 @@ class RegistroServiceTest {
 
 		UsuarioBasico resultado = service.buscarPorFirebaseUid("uid-existente");
 
-		assertThat(resultado.username()).isEqualTo("mateo");
-		assertThat(resultado.email()).isEqualTo("mateo@example.com");
+		assertThat(resultado.avatar()).isNull();
 	}
 
 	@Test

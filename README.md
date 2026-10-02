@@ -148,11 +148,13 @@ contenido (`RegistroGrpcMapper#normalizarAvatar`). Se persiste en la nueva colum
 
 ### Consulta por UID de Firebase
 
-`RegistroGrpcService/BuscarUsuarioPorUid` resuelve `username`/`email` a partir del UID que
-Firebase le asignó al usuario — pensado para que `chat-gateway` sepa a qué cuenta corresponde
-una sesión ya autenticada, sin conocer el esquema de la base de datos. `NOT_FOUND` si el UID
-no existe; `INVALID_ARGUMENT` si viene vacío. A diferencia del registro, esta respuesta **no**
-es genérica (no hay riesgo de enumeración: el UID es opaco y lo aporta quien ya lo posee).
+`RegistroGrpcService/BuscarUsuarioPorUid` resuelve `username`/`email`/`avatar` a partir del
+UID que Firebase le asignó al usuario — pensado para que `chat-gateway` sepa a qué cuenta
+corresponde una sesión ya autenticada, sin conocer el esquema de la base de datos. `avatar`
+viaja vacío si el usuario no eligió uno (mismo criterio que `RegistrarUsuarioResponse.avatar`,
+ver *Avatar del usuario* más arriba). `NOT_FOUND` si el UID no existe; `INVALID_ARGUMENT` si
+viene vacío. A diferencia del registro, esta respuesta **no** es genérica (no hay riesgo de
+enumeración: el UID es opaco y lo aporta quien ya lo posee).
 
 **Este servicio no valida ningún token de identidad.** Quien llama a este rpc (siempre
 `chat-gateway`, nunca el cliente final) ya autenticó y autorizó la petición él mismo, con su
@@ -316,8 +318,8 @@ service RegistroGrpcService {
 - **Validación**: como gRPC no pasa por Spring MVC, `RegistroGrpcController` valida a mano el
   `RegistroRequest` con el mismo `Validator` de Bean Validation que usa el resto del flujo —
   no hay una capa REST/OpenAPI aparte que repita las reglas.
-- **`BuscarUsuarioPorUid`**: resuelve `username`/`email` a partir del UID de Firebase — ver
-  *Consulta por UID de Firebase* más arriba.
+- **`BuscarUsuarioPorUid`**: resuelve `username`/`email`/`avatar` a partir del UID de Firebase
+  — ver *Consulta por UID de Firebase* más arriba.
 - **`ExisteUsername`**: `true`/`false` sobre si un username ya está en uso — ver
   *Disponibilidad de un username* más arriba. Es el único rpc pensado para ser público (sin
   sesión ni token detrás).

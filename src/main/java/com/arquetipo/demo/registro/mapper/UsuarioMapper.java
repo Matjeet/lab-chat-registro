@@ -24,6 +24,6 @@ public class UsuarioMapper {
 	}
 
 	public UsuarioBasico toUsuarioBasico(Usuario usuario) {
-		return new UsuarioBasico(usuario.getUsername(), usuario.getEmail());
+		return new UsuarioBasico(usuario.getUsername(), usuario.getEmail(), usuario.getAvatar());
 	}
 }
