@@ -11,6 +11,7 @@ import static org.mockito.Mockito.when;
 
 import com.arquetipo.demo.common.exception.DuplicateResourceException;
 import com.arquetipo.demo.common.exception.UsuarioNoEncontradoException;
+import com.arquetipo.demo.registro.amqp.NotificadorAmqp;
 import com.arquetipo.demo.registro.domain.ProveedorAuth;
 import com.arquetipo.demo.registro.domain.Usuario;
 import com.arquetipo.demo.registro.identidad.ProveedorIdentidad;
@@ -48,11 +49,15 @@ class RegistroServiceTest {
 	@Mock
 	private ProveedorIdentidad proveedorIdentidad;
 
+	@Mock
+	private NotificadorAmqp notificador;
+
 	private RegistroService service;
 
 	@BeforeEach
 	void setUp() {
-		service = new RegistroService(repository, proveedorRepository, new UsuarioMapper(), proveedorIdentidad);
+		service = new RegistroService(
+				repository, proveedorRepository, new UsuarioMapper(), proveedorIdentidad, notificador);
 	}
 
 	private static RegistroRequest request() {
@@ -370,6 +375,93 @@ class RegistroServiceTest {
 
 		assertThat(service.existeUsername("  mateo  ")).isTrue();
 		verify(repository).existsByUsernameIgnoreCase("mateo");
+	}
+
+	@Test
+	void registrar_exito_publicaUsernameYAvatarAlFinal() {
+		stubProveedorFeliz();
+		String avatar = "<Blobatar name=\"mateo\" animate=\"hover\" />";
+		when(repository.existsByUsernameIgnoreCase("mateo")).thenReturn(false);
+		when(repository.existsByEmailIgnoreCase("mateo@example.com")).thenReturn(false);
+		when(proveedorIdentidad.crearUsuario("mateo@example.com", PASSWORD_VALIDA))
+				.thenReturn(new UsuarioExterno("uid-nuevo-1"));
+		when(repository.saveAndFlush(any(Usuario.class))).thenAnswer(inv -> inv.getArgument(0));
+
+		service.registrar(requestConAvatar(avatar));
+
+		// Orden: primero se crea en el proveedor y se guarda en la base, y solo despues se publica.
+		org.mockito.InOrder orden = org.mockito.Mockito.inOrder(proveedorIdentidad, repository, notificador);
+		orden.verify(proveedorIdentidad).crearUsuario("mateo@example.com", PASSWORD_VALIDA);
+		orden.verify(repository).saveAndFlush(any(Usuario.class));
+		orden.verify(notificador).notificarRegistro("mateo", avatar);
+	}
+
+	@Test
+	void registrar_sinAvatar_publicaAvatarNulo() {
+		stubProveedorFeliz();
+		when(repository.existsByUsernameIgnoreCase("mateo")).thenReturn(false);
+		when(repository.existsByEmailIgnoreCase("mateo@example.com")).thenReturn(false);
+		when(proveedorIdentidad.crearUsuario("mateo@example.com", PASSWORD_VALIDA))
+				.thenReturn(new UsuarioExterno("uid-nuevo-1"));
+		when(repository.saveAndFlush(any(Usuario.class))).thenAnswer(inv -> inv.getArgument(0));
+
+		service.registrar(request());
+
+		verify(notificador).notificarRegistro("mateo", null);
+	}
+
+	@Test
+	void registrar_reconciliacionExitosa_tambienPublica() {
+		stubProveedorFeliz();
+		when(repository.existsByUsernameIgnoreCase("mateo")).thenReturn(false);
+		when(repository.existsByEmailIgnoreCase("mateo@example.com")).thenReturn(false);
+		when(proveedorIdentidad.crearUsuario(eq("mateo@example.com"), any()))
+				.thenThrow(new UsuarioYaRegistradoException("ya existe", null));
+		when(proveedorIdentidad.buscarPorEmail("mateo@example.com"))
+				.thenReturn(Optional.of(new UsuarioExterno("uid-preexistente")));
+		when(repository.existsByFirebaseUid("uid-preexistente")).thenReturn(false);
+		when(repository.saveAndFlush(any(Usuario.class))).thenAnswer(inv -> inv.getArgument(0));
+
+		service.registrar(request());
+
+		verify(notificador).notificarRegistro("mateo", null);
+	}
+
+	@Test
+	void registrar_usernameDuplicado_noPublica() {
+		when(repository.existsByUsernameIgnoreCase("mateo")).thenReturn(true);
+
+		assertThatThrownBy(() -> service.registrar(request())).isInstanceOf(DuplicateResourceException.class);
+
+		verify(notificador, never()).notificarRegistro(any(), any());
+	}
+
+	@Test
+	void registrar_fallaElProveedorDeIdentidad_noPublica() {
+		stubProveedorFeliz();
+		when(repository.existsByUsernameIgnoreCase("mateo")).thenReturn(false);
+		when(repository.existsByEmailIgnoreCase("mateo@example.com")).thenReturn(false);
+		when(proveedorIdentidad.crearUsuario(eq("mateo@example.com"), any()))
+				.thenThrow(new ProveedorIdentidadException("red caida"));
+
+		assertThatThrownBy(() -> service.registrar(request())).isInstanceOf(ProveedorIdentidadException.class);
+
+		verify(notificador, never()).notificarRegistro(any(), any());
+	}
+
+	@Test
+	void registrar_fallaElGuardadoLocal_noPublica() {
+		stubProveedorFeliz();
+		when(repository.existsByUsernameIgnoreCase("mateo")).thenReturn(false);
+		when(repository.existsByEmailIgnoreCase("mateo@example.com")).thenReturn(false);
+		when(proveedorIdentidad.crearUsuario("mateo@example.com", PASSWORD_VALIDA))
+				.thenReturn(new UsuarioExterno("uid-nuevo-1"));
+		when(repository.saveAndFlush(any(Usuario.class)))
+				.thenThrow(new DataIntegrityViolationException("uk_usuarios_email"));
+
+		assertThatThrownBy(() -> service.registrar(request())).isInstanceOf(DuplicateResourceException.class);
+
+		verify(notificador, never()).notificarRegistro(any(), any());
 	}
 
 	@Test
