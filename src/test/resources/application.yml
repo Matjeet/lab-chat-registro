@@ -13,6 +13,19 @@ grpc:
     # si). Los tests del controller gRPC arrancan su propio servidor in-process (grpc-testing).
     enabled: false
 
+management:
+  health:
+    # Mismo criterio que application.yml: RabbitMQ es best-effort, no entra en el health.
+    rabbit:
+      enabled: false
+
+app:
+  amqp:
+    # Sin esto, los tests que dan de alta un usuario de verdad intentarian publicar en un
+    # RabbitMQ real (o fallar al conectar). Los tests de la publicacion usan un RabbitTemplate
+    # mockeado, ver NotificadorAmqpTest.
+    enabled: false
+
 spring:
   flyway:
     enabled: false

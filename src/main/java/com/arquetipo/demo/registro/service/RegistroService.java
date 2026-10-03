@@ -2,6 +2,7 @@ package com.arquetipo.demo.registro.service;
 
 import com.arquetipo.demo.common.exception.DuplicateResourceException;
 import com.arquetipo.demo.common.exception.UsuarioNoEncontradoException;
+import com.arquetipo.demo.registro.amqp.NotificadorAmqp;
 import com.arquetipo.demo.registro.domain.ProveedorAuth;
 import com.arquetipo.demo.registro.domain.Usuario;
 import com.arquetipo.demo.registro.identidad.ProveedorIdentidad;
@@ -18,6 +19,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
  * Orquesta el alta de usuarios: crea la identidad en el proveedor externo (Firebase Auth,
@@ -40,6 +43,9 @@ import org.springframework.transaction.annotation.Transactional;
  *   <li>Si la creacion en el proveedor tuvo exito pero el guardado en la base de datos falla,
  *       se revierte el usuario recien creado en el proveedor para no dejarlo huerfano. En la
  *       rama de reconciliacion NUNCA se borra: ese usuario ya existia antes de esta peticion.</li>
+ *   <li>Como ultimo paso, ya con el usuario creado en el proveedor y en la base de datos, se
+ *       publica el alta (username + avatar) en RabbitMQ tras el commit de la transaccion --
+ *       ver {@link NotificadorAmqp}. Es best-effort: un fallo ahi no revierte nada.</li>
  * </ol>
  *
  * <p>Seguridad: ante cualquier conflicto (username, email, o el usuario ya existente en el
@@ -61,13 +67,15 @@ public class RegistroService {
 	private final ProveedorAuthRepository proveedorRepository;
 	private final UsuarioMapper mapper;
 	private final ProveedorIdentidad proveedorIdentidad;
+	private final NotificadorAmqp notificador;
 
 	public RegistroService(UsuarioRepository repository, ProveedorAuthRepository proveedorRepository,
-			UsuarioMapper mapper, ProveedorIdentidad proveedorIdentidad) {
+			UsuarioMapper mapper, ProveedorIdentidad proveedorIdentidad, NotificadorAmqp notificador) {
 		this.repository = repository;
 		this.proveedorRepository = proveedorRepository;
 		this.mapper = mapper;
 		this.proveedorIdentidad = proveedorIdentidad;
+		this.notificador = notificador;
 	}
 
 	public RegistroResponse registrar(RegistroRequest request) {
@@ -90,12 +98,14 @@ public class RegistroService {
 		try {
 			UsuarioExterno creado = proveedorIdentidad.crearUsuario(email, request.password());
 			RegistroResponse respuesta = guardar(username, email, avatar, creado, proveedor, true);
+			notificarRegistro(respuesta);
 			log.debug("<< registrar() -> OK, id={}", respuesta.id());
 			return respuesta;
 		} catch (UsuarioYaRegistradoException ex) {
 			log.warn("El proveedor de identidad ya tenia un usuario con este email; "
 					+ "se intenta reconciliar. email='{}' motivo='{}'", email, ex.getMessage());
 			RegistroResponse respuesta = reconciliar(username, email, avatar, proveedor);
+			notificarRegistro(respuesta);
 			log.debug("<< registrar() -> OK (reconciliado), id={}", respuesta.id());
 			return respuesta;
 		} catch (ProveedorIdentidadException ex) {
@@ -200,6 +210,31 @@ public class RegistroService {
 				revertirEnProveedor(usuarioExterno.uid());
 			}
 			throw new DuplicateResourceException(CONFLICTO_GENERICO);
+		}
+	}
+
+	/**
+	 * Avisa por RabbitMQ del alta, como ultimo paso: tras haber creado el usuario en el proveedor
+	 * de identidad Y en la base de datos. Como {@code registrar} corre dentro de una transaccion,
+	 * la publicacion se difiere a {@code afterCommit}: si el commit fallara (o la transaccion se
+	 * revirtiera) no se anuncia un usuario que no existe. Sin transaccion activa (p. ej. un test
+	 * unitario) se publica de inmediato. El notificador nunca lanza: un fallo de RabbitMQ no
+	 * convierte en error un alta que ya esta hecha.
+	 */
+	private void notificarRegistro(RegistroResponse respuesta) {
+		log.debug(">> notificarRegistro(username='{}')", respuesta.username());
+		Runnable publicar = () -> notificador.notificarRegistro(respuesta.username(), respuesta.avatar());
+		if (TransactionSynchronizationManager.isSynchronizationActive()) {
+			TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+				@Override
+				public void afterCommit() {
+					publicar.run();
+				}
+			});
+			log.debug("<< notificarRegistro() -> publicacion diferida hasta el commit");
+		} else {
+			publicar.run();
+			log.debug("<< notificarRegistro() -> publicada de inmediato (sin transaccion activa)");
 		}
 	}
 

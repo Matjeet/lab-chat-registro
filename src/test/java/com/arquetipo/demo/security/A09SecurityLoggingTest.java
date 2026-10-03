@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
 import com.arquetipo.demo.common.exception.DuplicateResourceException;
+import com.arquetipo.demo.registro.amqp.NotificadorAmqp;
 import com.arquetipo.demo.registro.domain.ProveedorAuth;
 import com.arquetipo.demo.registro.identidad.ProveedorIdentidad;
 import com.arquetipo.demo.registro.identidad.ProveedorIdentidadException;
@@ -48,11 +49,15 @@ class A09SecurityLoggingTest {
 	@Mock
 	private ProveedorIdentidad proveedorIdentidad;
 
+	@Mock
+	private NotificadorAmqp notificador;
+
 	private RegistroService service;
 
 	@BeforeEach
 	void setUp() {
-		service = new RegistroService(repository, proveedorRepository, new UsuarioMapper(), proveedorIdentidad);
+		service = new RegistroService(
+				repository, proveedorRepository, new UsuarioMapper(), proveedorIdentidad, notificador);
 	}
 
 	private static RegistroRequest request() {
