@@ -426,6 +426,7 @@ pueden listar servicios y construir la petición sin el archivo, apuntando solo 
 
 | Fecha | Cambio |
 |---|---|
+| 2026-10-02 | Sin cambios en el `.proto`: `Registrar` ahora, como último paso del alta (tras el commit, ya creado en Firebase y en MySQL), publica `{username, avatar}` en RabbitMQ (exchange `chat.conversacion`, routing key `registro.#`, best-effort). Contrato del mensaje en `README.md` §*Publicación en RabbitMQ*. |
 | 2026-09-30 | Se añade `avatar` a `BuscarUsuarioPorUidResponse` (vacío si el usuario no eligió uno) — mismo valor ya persistido que `RegistrarUsuarioResponse.avatar`, resuelto junto con `username`/`email` en la misma consulta. |
 | 2026-09-29 | Se añade `avatar` (opcional) a `RegistrarUsuarioRequest`/`RegistrarUsuarioResponse`: URL http(s) o etiqueta `<Blobatar .../>`, nada más — validado con `@Pattern`, normalizado (comillas envolventes) antes de validar, persistido en la nueva columna `usuarios.avatar` (`V3__usuarios_avatar.sql`). |
 | 2026-09-22 | Se añade `ExisteUsername` (booleano de disponibilidad de un `username`, sin autenticación — consulta pública, a diferencia de `BuscarUsuarioPorUid`). |

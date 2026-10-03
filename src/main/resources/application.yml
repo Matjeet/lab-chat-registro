@@ -32,6 +32,28 @@ spring:
         max-page-size: 100
         one-indexed-parameters: false
 
+  # RabbitMQ: aviso de cada alta de usuario nueva, ver common/config/RabbitMqConfig /
+  # registro.amqp.NotificadorAmqp. La conexion la autoconfigura spring-boot-starter-amqp y es
+  # perezosa: el arranque de la app no depende de que RabbitMQ ya este levantado. El timeout
+  # corto evita que un broker inalcanzable retrase la respuesta del alta (se publica de forma
+  # sincrona, tras el commit).
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USERNAME:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
+    connection-timeout: 5s
+
+app:
+  amqp:
+    # false desactiva por completo RabbitMQ en este servicio (ni declara el exchange al arrancar
+    # ni publica el alta). Los tests lo hacen, ver src/test/resources.
+    enabled: ${RABBITMQ_ENABLED:true}
+    # Exchange (topic, durable) que declara este servicio y donde publica cada alta.
+    registro-exchange: ${RABBITMQ_REGISTRO_EXCHANGE:chat.conversacion}
+    # Routing key con la que se publica el alta.
+    registro-routing-key: ${RABBITMQ_REGISTRO_ROUTING_KEY:registro.#}
+
 firebase:
   # Firebase Auth como proveedor de identidad externo (com.arquetipo.demo.registro.identidad).
   # false desactiva por completo la inicializacion del SDK (los tests lo hacen).
@@ -63,6 +85,11 @@ management:
   endpoint:
     health:
       show-details: when-authorized
+  health:
+    # RabbitMQ es una dependencia best-effort (el alta se publica pero un broker caido no la
+    # rompe, ver NotificadorAmqp): no debe poner el /actuator/health del servicio en DOWN.
+    rabbit:
+      enabled: false
 
 logging:
   level:

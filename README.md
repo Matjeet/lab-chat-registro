@@ -17,6 +17,7 @@ sistema. El REST del sistema lo sirve **`chat-gateway`**, que reenvía aquí por
 | Identidad | Firebase Auth (Admin SDK), tras el puerto `registro.identidad.ProveedorIdentidad`. El servicio no persiste contraseñas. |
 | Validación | Bean Validation (`spring-boot-starter-validation`), aplicada a mano en el controller gRPC |
 | Transporte | gRPC (`registro/grpc/`, servidor embebido, ver *Protocolo gRPC*) |
+| Mensajería | RabbitMQ (`spring-boot-starter-amqp`): publica cada alta nueva (`registro/amqp/`, ver *Publicación en RabbitMQ*) |
 | Observabilidad | Spring Boot Actuator (vía `spring-boot-starter-webmvc`, único uso que le queda al HTTP en este servicio) |
 | Utilidades | Lombok, DevTools |
 
@@ -68,6 +69,11 @@ se sobreescriben por variables de entorno:
 | `FIREBASE_CREDENTIALS_PATH` | *(vacío)* | Ruta al JSON de la cuenta de servicio de Firebase. Vacío = credenciales por defecto del entorno (ADC / `GOOGLE_APPLICATION_CREDENTIALS`). |
 | `GRPC_SERVER_ENABLED` | `true` | `false` desactiva por completo el servidor gRPC (los tests lo hacen). |
 | `GRPC_SERVER_PORT` | `9090` | Puerto TCP del servidor gRPC, independiente del HTTP (`server.port`, solo usado hoy por Actuator). |
+| `RABBITMQ_ENABLED` | `true` | `false` desactiva por completo RabbitMQ en este servicio: ni declara el exchange al arrancar ni publica el alta (los tests lo hacen). |
+| `RABBITMQ_HOST` / `RABBITMQ_PORT` | `localhost` / `5672` | Dónde está RabbitMQ. En el `docker-compose.yml` de la raíz, dentro de la red del compose, es `rabbitmq` / `5672` (el `5673` de ese archivo es solo el puerto publicado al host). |
+| `RABBITMQ_USERNAME` / `RABBITMQ_PASSWORD` | `guest` / `guest` | Credenciales de RabbitMQ. |
+| `RABBITMQ_REGISTRO_EXCHANGE` | `chat.conversacion` | Nombre del exchange (topic, durable) que declara este servicio. |
+| `RABBITMQ_REGISTRO_ROUTING_KEY` | `registro.#` | Routing key con la que se publica cada alta. |
 
 Para desarrollo local hay un fichero **`.env`** (plantilla en [`.env.example`](.env.example),
 no se versiona):
@@ -121,6 +127,34 @@ servidor (`WARN`/`ERROR`), para no facilitar la enumeración de cuentas.
 4. Si Firebase creó el usuario pero **el guardado en la base de datos falla**, se **revierte**
    (borra) el usuario recién creado en Firebase, para no dejarlo huérfano. En la rama de
    reconciliación nunca se borra: ese usuario ya existía en Firebase antes de esta petición.
+
+### Publicación en RabbitMQ
+
+Como **último paso** del alta —cuando el usuario ya está creado en Firebase **y** guardado en
+MySQL— `RegistroService` publica un mensaje en RabbitMQ (`registro/amqp/NotificadorAmqp`):
+
+| | |
+|---|---|
+| Exchange | `chat.conversacion` — **lo declara este servicio** (topic, durable), al arrancar y de nuevo en la primera conexión que se logre si RabbitMQ no estaba disponible entonces |
+| Routing key | `registro.#` (`RABBITMQ_REGISTRO_ROUTING_KEY`) |
+| Cuerpo | JSON, `content-type: application/json`: `{"username": "mateo", "avatar": "<Blobatar .../>"}` — `avatar` es `null` si el usuario no eligió uno. Sin email, uid de Firebase ni ningún dato de autenticación |
+| Cabecera | `__TypeId__` = `com.arquetipo.demo.registro.amqp.UsuarioRegistradoAmqp` (la pone el conversor JSON de Spring AMQP; un consumidor con su propio DTO debe ignorarla o mapearla) |
+
+- **Después del commit, no antes**: la publicación se difiere a `afterCommit` de la
+  transacción de `registrar`, así que si el guardado o el commit fallan —o la transacción se
+  revierte— no se anuncia un usuario que no existe. También se publica cuando el alta termina
+  por *reconciliación* (Firebase ya tenía el email y aquí se creó la fila que faltaba).
+- **Best-effort**: si RabbitMQ no responde, se registra un `ERROR` en el log y el alta sigue
+  siendo exitosa — MySQL es la fuente de verdad, el mensaje es un aviso. La conexión es
+  perezosa (arrancar no exige RabbitMQ) y con timeout de 5 s, para que un broker inalcanzable
+  no retrase la respuesta. Por lo mismo, RabbitMQ no entra en `/actuator/health`.
+- **Sobre la routing key `registro.#`**: se publica tal cual, con el `#` literal como segunda
+  palabra. Un consumidor que enlace su cola con `registro.#` (o `registro.*`) lo recibe; uno
+  que enlace una clave exacta como `registro.usuario` **no**, porque la clave publicada no es
+  esa. Si más adelante se quiere una clave concreta por evento, basta cambiar
+  `RABBITMQ_REGISTRO_ROUTING_KEY`.
+- Verificado en vivo contra un RabbitMQ real (Podman): el exchange existe nada más arrancar,
+  llegan los mensajes con el cuerpo de arriba, y con el broker caído el alta responde bien.
 
 ### Avatar del usuario
 
@@ -195,6 +229,7 @@ com.arquetipo.demo
 ├── DemoApplication.java
 ├── common/                              infraestructura transversal
 │   ├── config/JpaAuditingConfig.java        auditoría (createdAt/updatedAt)
+│   ├── config/RabbitMqConfig.java           exchange `chat.conversacion` (topic, durable) + RabbitTemplate JSON; lo declara al arrancar
 │   ├── env/DotenvEnvironmentPostProcessor.java  carga .env (Gradle, IDE o jar — ver META-INF/spring.factories)
 │   ├── exception/DuplicateResourceException  → ALREADY_EXISTS en el controller gRPC
 │   ├── exception/UsuarioNoEncontradoException → NOT_FOUND en el controller gRPC
@@ -216,7 +251,10 @@ com.arquetipo.demo
     │   └── firebase/
     │       ├── FirebaseAppConfig.java           inicializa el SDK (FirebaseApp/FirebaseAuth)
     │       └── FirebaseProveedorIdentidad.java  implementacion sobre Firebase Admin SDK
-    ├── service/RegistroService.java         orquesta el alta; buscarPorFirebaseUid()/existeUsername() para las consultas
+    ├── amqp/                                aviso de cada alta nueva por RabbitMQ
+    │   ├── NotificadorAmqp.java                 publica username + avatar (best-effort, nunca lanza)
+    │   └── UsuarioRegistradoAmqp.java           record del mensaje (username, avatar)
+    ├── service/RegistroService.java         orquesta el alta (y publica el aviso tras el commit); buscarPorFirebaseUid()/existeUsername() para las consultas
     ├── web/dto/RegistroRequest.java · RegistroResponse.java · UsuarioBasico.java   contrato compartido (validado y usado por grpc/)
     └── grpc/                                unico protocolo expuesto (ver *Protocolo gRPC*)
         ├── RegistroGrpcController.java          rpc Registrar + BuscarUsuarioPorUid + ExisteUsername (valida + delega en RegistroService)
@@ -352,6 +390,9 @@ Patrón **AAA** (*Arrange – Act – Assert*) en toda la suite. Van todos en `.
 
 - Unitarios: `RegistroServiceTest`, `UsuarioRepositoryTest` (`@DataJpaTest`, H2).
 - De protocolo: `RegistroGrpcControllerTest` (servidor gRPC in-process, sin red real).
+- RabbitMQ: `NotificadorAmqpTest` (con `RabbitTemplate` mockeado) y
+  `RegistroPublicacionTrasCommitTest` (transacciones reales sobre H2: se publica solo tras el
+  commit, nunca si se revierte). Ninguno necesita un RabbitMQ real.
 - Integración: `@SpringBootTest` sobre H2 en memoria (no requiere MySQL).
 - **Seguridad (OWASP Top 10)**: `src/test/java/com/arquetipo/demo/security/`, una clase por
   categoría verificable desde código — la mayoría llama directamente a
